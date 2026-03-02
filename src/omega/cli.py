@@ -780,7 +780,11 @@ def cmd_setup(args):
     steps_done.append("Config file")
 
     # 5. Client-specific setup
-    hooks_src = Path(__file__).parent.parent.parent / "hooks"
+    # Hooks are bundled inside the package at src/omega/hooks/
+    # Fallback to repo root hooks/ for development installs
+    hooks_src = Path(__file__).parent / "hooks"
+    if not hooks_src.exists():
+        hooks_src = Path(__file__).parent.parent.parent / "hooks"
     if client == "claude-code":
         _setup_claude_code(errors, hooks_src, hooks_only=hooks_only)
         if hooks_only:
