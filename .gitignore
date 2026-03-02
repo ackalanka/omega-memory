@@ -46,4 +46,3 @@ Thumbs.db
 # Project-local agent instructions (contains internal references)
 CLAUDE.md
 docs/submissions/
-src/omega/license.py

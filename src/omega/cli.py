@@ -2094,6 +2094,49 @@ def cmd_mobile(args):
         print("\nMobile access via mcp-proxy + Tailscale.")
 
 
+def cmd_activate(args):
+    """Activate a Pro license key."""
+    from omega.license import activate
+    key = args.key.strip()
+
+    if not key.startswith("OMEGA-PRO-"):
+        print("Invalid key format. Keys start with OMEGA-PRO-")
+        sys.exit(1)
+
+    print("Activating license key...")
+    if activate(key):
+        print("License activated successfully! Pro modules will load on next MCP server start.")
+        print("\nRestart Claude Code or your MCP client to load Pro tools.")
+    else:
+        print("Activation failed. Please check your key and try again.")
+        print("If the problem persists, contact omega-memory@proton.me")
+        sys.exit(1)
+
+
+def cmd_license(args):
+    """Show current license status."""
+    from omega.license import license_status, deactivate
+
+    if getattr(args, "deactivate", False):
+        deactivate()
+        print("License removed.")
+        return
+
+    status = license_status()
+    if status["active"]:
+        print("Status:      Active")
+        print(f"Key:         {status['key']}")
+        print(f"Valid until:  {status['valid_until']}")
+    else:
+        if status["key"]:
+            print("Status:      Expired")
+            print(f"Key:         {status['key']}")
+            print("\nRun 'omega activate <key>' to reactivate, or resubscribe at https://omegamax.co/pro")
+        else:
+            print("Status:      No license")
+            print("\nUpgrade at https://omegamax.co/pro")
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="omega",
@@ -2257,6 +2300,13 @@ def main():
     mobile_serve_parser.add_argument("--port", type=int, default=8089, help="HTTP port (default: 8089)")
     mobile_serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
 
+    # --- License commands ---
+    activate_parser = subparsers.add_parser("activate", help="Activate a Pro license key")
+    activate_parser.add_argument("key", help="License key (OMEGA-PRO-...)")
+
+    license_parser = subparsers.add_parser("license", help="Show Pro license status")
+    license_parser.add_argument("--deactivate", action="store_true", help="Remove local license")
+
     args = parser.parse_args()
 
     commands = {
@@ -2284,6 +2334,8 @@ def main():
         "kb": cmd_knowledge,
         "cloud": cmd_cloud,
         "mobile": cmd_mobile,
+        "activate": cmd_activate,
+        "license": cmd_license,
     }
 
     # Wire plugin CLI commands (omega-pro, etc.)
