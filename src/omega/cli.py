@@ -132,6 +132,7 @@ def _inject_settings_hooks(hooks_src: Path):
 
     configured = 0
     skipped = 0
+    repaired = 0
 
     for event, hook_defs in manifest.items():
         # Normalize: old format is a single dict, new format is a list of dicts
@@ -146,20 +147,29 @@ def _inject_settings_hooks(hooks_src: Path):
             # Strip .py and use the full script string for matching
             script_key = script.replace(".py", "").replace(" ", "_")
 
-            # Check if this OMEGA hook is already wired
-            already_wired = False
+            # Check if this OMEGA hook is already wired (match by script_key in command)
+            existing_idx = None
+            existing_hook_idx = None
             if event in settings["hooks"]:
-                for entry in settings["hooks"][event]:
-                    for h in entry.get("hooks", []):
+                for i, entry in enumerate(settings["hooks"][event]):
+                    for j, h in enumerate(entry.get("hooks", [])):
                         cmd = h.get("command", "")
-                        if "omega" in cmd and script_key in cmd.replace(".py", "").replace(" ", "_"):
-                            already_wired = True
+                        if script_key in cmd.replace(".py", "").replace(" ", "_"):
+                            existing_idx = i
+                            existing_hook_idx = j
                             break
-                    if already_wired:
+                    if existing_idx is not None:
                         break
 
-            if already_wired:
-                skipped += 1
+            if existing_idx is not None:
+                # Hook exists — check if the path is correct
+                existing_cmd = settings["hooks"][event][existing_idx]["hooks"][existing_hook_idx]["command"]
+                if existing_cmd == command:
+                    skipped += 1
+                    continue
+                # Path changed (broken or outdated) — replace it
+                settings["hooks"][event][existing_idx]["hooks"][existing_hook_idx]["command"] = command
+                repaired += 1
                 continue
 
             # Build the hook entry
@@ -183,9 +193,11 @@ def _inject_settings_hooks(hooks_src: Path):
 
     if configured > 0:
         print(f"  settings.json: {configured} hook(s) configured")
+    if repaired > 0:
+        print(f"  settings.json: {repaired} hook(s) repaired (paths updated)")
     if skipped > 0:
         print(f"  settings.json: {skipped} hook(s) already configured")
-    if configured == 0 and skipped == 0:
+    if configured == 0 and skipped == 0 and repaired == 0:
         print("  settings.json: hooks configured")
 
 
