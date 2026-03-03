@@ -1,7 +1,9 @@
-"""OMEGA MCP Tool Schemas -- 12 tools for memory management.
+"""OMEGA MCP Tool Schemas -- 14 tools for memory management.
 
-Consolidated into 12 action-discriminated composites.
+Consolidated into 14 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
+omega_briefing and omega_habits remain as backward-compat aliases in handlers.
+omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
 """
 
 TOOL_SCHEMAS = [
@@ -15,7 +17,7 @@ TOOL_SCHEMAS = [
                 "text": {"type": "string", "description": "Alias for content"},
                 "event_type": {
                     "type": "string",
-                    "description": "Type: memory (default), session_summary, task_completion, error_pattern, lesson_learned, decision, user_preference",
+                    "description": "Type: memory (default), session_summary, task_completion, error_pattern, lesson_learned, decision, user_preference, constraint, advisor_insight",
                 },
                 "metadata": {"type": "object", "description": "Additional metadata"},
                 "session_id": {"type": "string"},
@@ -40,18 +42,18 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_query",
-        "description": "Search memories. Modes: 'semantic' (default) for meaning-based search, 'phrase' for exact substring match, 'timeline' for recent memories grouped by day.",
+        "description": "Search memories. Modes: 'semantic' (default) for meaning-based search, 'phrase' for exact substring match, 'timeline' for recent memories grouped by day, 'browse' for listing by type/session/recent.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "query": {"type": "string", "description": "Search query (or exact phrase when mode='phrase'). Not required for mode='timeline'."},
+                "query": {"type": "string", "description": "Search query (or exact phrase when mode='phrase'). Not required for mode='timeline' or mode='browse'."},
                 "mode": {
                     "type": "string",
-                    "enum": ["semantic", "phrase", "timeline"],
-                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day",
+                    "enum": ["semantic", "phrase", "timeline", "browse"],
+                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day, 'browse' for listing",
                 },
                 "limit": {"type": "integer", "default": 10},
-                "event_type": {"type": "string", "description": "Filter by event type"},
+                "event_type": {"type": "string", "description": "Filter by event type (also used as type filter in semantic mode for scoped search)"},
                 "project": {"type": "string"},
                 "session_id": {"type": "string"},
                 "context_file": {"type": "string", "description": "Current file being edited (boosts results)"},
@@ -63,6 +65,40 @@ TOOL_SCHEMAS = [
                 "case_sensitive": {"type": "boolean", "description": "Case-sensitive (only for mode='phrase', default false)", "default": False},
                 "days": {"type": "integer", "description": "Days to look back (only for mode='timeline', default 7)", "default": 7},
                 "limit_per_day": {"type": "integer", "description": "Max per day (only for mode='timeline', default 10)", "default": 10},
+                "browse_by": {
+                    "type": "string",
+                    "enum": ["type", "session", "recent"],
+                    "description": "Browse dimension (only for mode='browse'): 'type' lists by event_type, 'session' lists by session_id, 'recent' lists most recent memories",
+                },
+                "context": {
+                    "type": "string",
+                    "enum": ["general", "error_debug", "file_edit", "planning", "review"],
+                    "description": "Retrieval context for tuned scoring. 'error_debug' boosts error patterns, 'planning' boosts decisions, 'review' boosts lessons, 'file_edit' boosts file-related memories.",
+                },
+                "perspective": {
+                    "type": "string",
+                    "enum": ["implementation", "critique", "verification"],
+                    "description": "Behavioral diversity lens. Biases retrieval toward different memory types: 'implementation' boosts errors/lessons/code, 'critique' boosts constraints/preferences/contradictions, 'verification' boosts decisions/benchmarks/evaluations.",
+                },
+                "strength_min": {
+                    "type": "number",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "description": "Minimum strength score (0.0-1.0). Filters out weak/decayed memories.",
+                },
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["episodic", "semantic", "procedural"],
+                    "description": "Filter by memory type: 'episodic' (session events), 'semantic' (facts/decisions), 'procedural' (lessons/rules).",
+                },
+                "include_contradicted": {
+                    "type": "boolean",
+                    "description": "If true, return only memories that have been contradicted by newer memories. Useful for data quality auditing.",
+                },
+                "valid_at": {
+                    "type": "string",
+                    "description": "ISO datetime. Return only memories that were valid at this point in time. Enables temporal queries like 'what did we know before session X?'",
+                },
             },
         },
     },
@@ -73,28 +109,13 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_protocol",
-        "description": "Retrieve your operating rules and behavioral guidelines for this session. Returns context-sensitive instructions covering memory usage, coordination, reminders, and workflow. Call after omega_welcome at session start, or on-demand for a specific section.",
+        "description": "Retrieve your operating rules and behavioral guidelines for this session. Returns context-sensitive instructions covering memory usage, coordination, reminders, and workflow. In multi-agent mode, includes a session role (primary/challenger/verifier) for behavioral diversity. Call after omega_welcome at session start, or on-demand for a specific section.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "section": {"type": "string", "description": "Section: 'memory', 'context', 'git', 'heuristics', 'verification', 'efficiency', 'source_verification', 'reminders'. Groups: 'solo', 'full', 'minimal'."},
+                "section": {"type": "string", "description": "Section: 'memory', 'coordination', 'coordination_gate', 'teamwork', 'context', 'reminders', 'diagnostics', 'entity', 'heuristics', 'git', 'what_next'. Groups: 'solo', 'multi_agent', 'full', 'minimal'."},
                 "project": {"type": "string", "description": "Project path for context-sensitive rules."},
-            },
-        },
-    },
-    {
-        "name": "omega_lessons",
-        "description": "Retrieve lessons learned from past sessions to avoid repeating mistakes. Use before starting a task to check for known pitfalls. Results ranked by verification count and access frequency. Supports cross-project search.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "Task description for relevance filtering"},
-                "project_path": {"type": "string", "description": "Project scope"},
-                "limit": {"type": "integer", "description": "Max lessons (default 5)", "default": 5},
-                "cross_project": {"type": "boolean", "description": "Search across all projects (default false)", "default": False},
-                "exclude_project": {"type": "string", "description": "Project to exclude (with cross_project=true)"},
-                "exclude_session": {"type": "string", "description": "Session ID to exclude"},
-                "agent_type": {"type": "string", "description": "Filter to agent type. Omit for all."},
+                "session_id": {"type": "string", "description": "Session ID for role assignment in multi-agent mode."},
             },
         },
     },
@@ -132,20 +153,24 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_memory",
-        "description": "Manage a specific memory by ID: edit its content, delete it, mark it as helpful/unhelpful/outdated, find similar memories, or traverse relationship edges. Use when acting on an individual memory rather than searching broadly.",
+        "description": "Manage a specific memory by ID: edit its content, delete it, mark it as superseded, mark it as helpful/unhelpful/outdated, find similar memories, traverse relationship edges, link two memories, or list flagged memories for review. Use when acting on an individual memory rather than searching broadly.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["edit", "delete", "feedback", "similar", "traverse"], "description": "Operation to perform"},
-                "memory_id": {"type": "string", "description": "Memory node ID (required for all actions)"},
-                "new_content": {"type": "string", "description": "New content (only for action='edit')"},
+                "action": {"type": "string", "enum": ["edit", "delete", "feedback", "similar", "traverse", "link", "flagged", "check_contradictions", "supersede"], "description": "Operation to perform"},
+                "memory_id": {"type": "string", "description": "Memory node ID (required for most actions, not required for 'flagged' or 'check_contradictions')"},
+                "new_content": {"type": "string", "description": "New content (for action='edit') or content to check (for action='check_contradictions')"},
                 "rating": {"type": "string", "description": "helpful, unhelpful, or outdated (only for action='feedback')"},
-                "reason": {"type": "string", "description": "Optional explanation for feedback"},
-                "limit": {"type": "integer", "description": "Max results for similar (default 5)", "default": 5},
+                "reason": {"type": "string", "description": "Optional explanation (for action='feedback' or action='supersede')"},
+                "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
                 "max_hops": {"type": "integer", "description": "Traversal depth 1-5 (default 2, only for action='traverse')", "default": 2},
                 "min_weight": {"type": "number", "description": "Min edge weight 0.0-1.0 (default 0.0, only for action='traverse')", "default": 0.0},
+                "edge_types": {"type": "array", "items": {"type": "string"}, "description": "Filter by edge type: related, contradicts, supersedes, evolves (only for action='traverse')"},
+                "target_id": {"type": "string", "description": "Target memory ID (for action='link' or action='supersede')"},
+                "edge_type": {"type": "string", "enum": ["related", "contradicts", "supersedes", "evolves"], "description": "Edge type (only for action='link', default 'related')"},
+                "weight": {"type": "number", "description": "Edge weight 0.0-1.0 (only for action='link', default 1.0)"},
             },
-            "required": ["action", "memory_id"],
+            "required": ["action"],
         },
     },
     {
@@ -173,6 +198,7 @@ TOOL_SCHEMAS = [
                 "project": {"type": "string"},
                 "status": {"type": "string", "enum": ["pending", "fired", "dismissed", "all"], "description": "Filter (for action='list')"},
                 "reminder_id": {"type": "string", "description": "Reminder ID (for action='dismiss')"},
+                "entity_id": {"type": "string", "description": "Scope reminders to entity (for action='list'). Omit for all."},
             },
         },
     },
@@ -201,14 +227,127 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_stats",
-        "description": "View analytics about stored memories: breakdown by type, per-session statistics, weekly activity digest, or access rate trends. Use to understand memory growth, usage patterns, and health over time.",
+        "description": "View analytics and behavioral insights: memory breakdown by type, per-session statistics, weekly digest, forgetting audit log, deduplication stats, access rate trends, milestones, unified diagnostic report, and behavioral patterns (habits_list, habits_analyze, habits_profile, habits_confirm, habits_deny, habits_recommendations).",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["types", "sessions", "digest", "access_rate"], "description": "Which stats to retrieve"},
+                "action": {
+                    "type": "string",
+                    "enum": ["types", "sessions", "digest", "forgetting_log", "dedup", "milestones", "access_rate", "diagnostic", "habits_list", "habits_confirm", "habits_deny", "habits_analyze", "habits_profile", "habits_recommendations"],
+                    "description": "Which stats/insights to retrieve. 'diagnostic' returns a unified health/value report. habits_* actions manage behavioral patterns.",
+                },
                 "days": {"type": "integer", "description": "Days for digest (default 7)", "default": 7},
+                "limit": {"type": "integer", "description": "Max entries for forgetting_log (default 50)", "default": 50},
+                "reason": {"type": "string", "description": "Filter forgetting_log by reason"},
+                "pattern_id": {"type": "string", "description": "Memory ID of a behavioral pattern (for habits_confirm/habits_deny)"},
             },
             "required": ["action"],
+        },
+    },
+    {
+        "name": "omega_reflect",
+        "description": "Analyze memory quality and knowledge evolution. 'contradictions' finds conflicting memories on a topic, 'evolution' traces how understanding changed over time, 'stale' surfaces old never-accessed memories for review.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["contradictions", "evolution", "stale"],
+                    "description": "Analysis to perform",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "Topic to analyze (required for contradictions/evolution)",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max memories to analyze (default 20 for contradictions/evolution, 30 for stale)",
+                    "default": 20,
+                },
+                "days": {
+                    "type": "integer",
+                    "description": "Look-back window for stale action (default 30)",
+                    "default": 30,
+                },
+                "min_age_days": {
+                    "type": "integer",
+                    "description": "Minimum age in days to be considered stale (default 14)",
+                    "default": 14,
+                },
+                "entity_id": {
+                    "type": "string",
+                    "description": "Scope to entity. Omit for all.",
+                },
+            },
+            "required": ["action"],
+        },
+    },
+    {
+        "name": "omega_consult_gpt",
+        "description": "Consult GPT for a second opinion on hard problems. Use when stuck (10+ min or 3+ failed approaches), facing irreversible architecture decisions, debugging dead ends, cross-validating fragile solutions, or bridging domain expertise gaps. Do NOT use for simple tasks, speed-sensitive work, or when tests already pass.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The question or problem to consult GPT about.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Supporting context: code snippets, error messages, constraints. Kept separate from prompt for clarity.",
+                },
+                "system": {
+                    "type": "string",
+                    "description": "Override the system prompt for domain-specific framing (default: generic second-opinion prompt).",
+                },
+                "temperature": {
+                    "type": "number",
+                    "description": "Sampling temperature: 0.0-0.3 for factual, 0.5-0.7 for design, 0.7-1.0 for brainstorming (default: 0.7).",
+                    "minimum": 0.0,
+                    "maximum": 2.0,
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Max response tokens (default: 4096, max: 16384).",
+                    "minimum": 1,
+                    "maximum": 16384,
+                },
+            },
+            "required": ["prompt"],
+        },
+    },
+    {
+        "name": "omega_consult_claude",
+        "description": "Consult Claude for a second opinion on hard problems (for non-Anthropic agents). Use when stuck (10+ min or 3+ failed approaches), facing irreversible architecture decisions, debugging dead ends, cross-validating fragile solutions, or bridging domain expertise gaps. Do NOT use for simple tasks, speed-sensitive work, or when tests already pass.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The question or problem to consult Claude about.",
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Supporting context: code snippets, error messages, constraints. Kept separate from prompt for clarity.",
+                },
+                "system": {
+                    "type": "string",
+                    "description": "Override the system prompt for domain-specific framing (default: generic second-opinion prompt).",
+                },
+                "temperature": {
+                    "type": "number",
+                    "description": "Sampling temperature: 0.0-0.3 for factual, 0.5-0.7 for design, 0.7-1.0 for brainstorming (default: 0.7).",
+                    "minimum": 0.0,
+                    "maximum": 2.0,
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Max response tokens (default: 4096, max: 16384).",
+                    "minimum": 1,
+                    "maximum": 16384,
+                },
+            },
+            "required": ["prompt"],
         },
     },
 ]

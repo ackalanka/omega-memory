@@ -78,8 +78,7 @@ class TestHumanTTL:
             metadata={"source": "test"},
             session_id="test-session",
         )
-        assert "14d" in result
-        assert "1209600" not in result
+        assert "permanent" in result
 
 
 # ============================================================================
@@ -333,9 +332,8 @@ class TestCaptureConfirmations:
             event_type="decision",
             session_id="test-s",
         )
-        # decision TTL is LONG_TERM = 14 days = 1209600 seconds
-        assert "14d" in result
-        assert "1209600" not in result
+        # decision TTL is now permanent (None)
+        assert "permanent" in result
 
 
 # ============================================================================

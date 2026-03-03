@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-03-03
+
+### Added
+
+- **New tool: `omega_reflect`** -- Self-evaluation tool that reviews recent memories and surfaces patterns, contradictions, and gaps in your knowledge graph.
+- **New tool: `omega_consult_gpt`** -- Multi-LLM consultation: ask GPT-4 for a second opinion on a question, with OMEGA context automatically included.
+- **New tool: `omega_consult_claude`** -- Multi-LLM consultation: ask Claude for a second opinion, with OMEGA context automatically included.
+- **Auto-relate with typed edges** -- Memories are now linked with typed relationship edges (`related`, `supersedes`, `contradicts`, `refines`, `supports`) during ingestion, improving graph traversal and retrieval accuracy.
+- **Contradiction supersession** -- When a new decision contradicts an existing one, the older memory is automatically superseded with a `contradicts` edge.
+- **Atomic fact splitting** -- Compound memories are automatically decomposed into individual fact nodes, improving retrieval precision for targeted queries.
+- **Query expansion** -- Queries are automatically expanded with related terms for better recall on ambiguous or short searches.
+- **Temporal queries** -- `omega_query` now supports time-scoped retrieval via `valid_at` parameter.
+- **Browse mode for `omega_query`** -- New `mode="browse"` option for open-ended exploration of your memory graph by type, session, or recency.
+- **Enhanced `omega_memory` actions** -- New actions: `link` (create typed edges between memories), `flagged` (list memories flagged for review), `supersede` (manually supersede a memory).
+- **Enhanced `omega_stats` actions** -- New actions: `forgetting_log`, `dedup`, `milestones`, `habits` (usage pattern analysis).
+- **RSS watchdog** -- Background process monitor that detects runaway memory usage and gracefully exits before OOM.
+- **SQLite executor** -- Dedicated thread pool executor prevents GIL+GC race conditions under concurrent access (SIGSEGV fix).
+- **Rotating log files** -- Server logs now rotate automatically (5 MB cap, 3 rotations) to prevent disk fill.
+- **Community-edition protocol** -- `omega_protocol` tool now returns useful operating guidelines for community users.
+
+### Changed
+
+- **Extended TTL system** -- Long-term memories now persist for 90 days (was 2 weeks). Decisions and advisor insights are permanent (never expire). Session summaries upgraded from ephemeral to long-term.
+- **Improved dedup thresholds** -- Added type-specific dedup thresholds for constraints (0.90), advisor insights (0.75), user facts (0.80), and skill templates (0.85).
+- **Consolidate default** -- `omega_consolidate` now defaults to 14-day prune window (was 30 days).
+
+### Fixed
+
+- Cross-session dedup now correctly handles decisions and insights restated across sessions.
+- Blocklist no longer incorrectly filters `user_preference` and `user_fact` memories.
+- Evolution threshold reduced to 1 new word (was 3), allowing incremental knowledge updates.
+- `find_similar()` filters expired and superseded memories with 2x over-fetch.
+- All `logger.error()` calls now include `exc_info=True` for better tracebacks.
+- Socket watchdog validates socket responsiveness instead of just checking existence.
+
 ## [0.10.8] - 2026-02-24
 
 ### Fixed

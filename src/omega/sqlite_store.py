@@ -809,7 +809,7 @@ class SQLiteStore:
 
         # Auto-generate embedding if not provided (outside lock — CPU-bound)
         if embedding is None:
-            from omega.graphs import generate_embedding, get_embedding_model_info, get_active_backend
+            from omega.embedding import generate_embedding, get_embedding_model_info, get_active_backend
 
             embedding = generate_embedding(content)
             # If we fell back to hash, don't store the embedding (would corrupt vec search)
@@ -1043,7 +1043,7 @@ class SQLiteStore:
             # Re-embed to keep vec table in sync (CPU-bound, done outside lock)
             if self._vec_available:
                 try:
-                    from omega.graphs import generate_embedding, get_active_backend
+                    from omega.embedding import generate_embedding, get_active_backend
 
                     new_embedding = generate_embedding(content)
                     if get_active_backend() is None:
@@ -1212,7 +1212,7 @@ class SQLiteStore:
         # Phase 1: Vector similarity search
         if self._vec_available and not skip_vec:
             try:
-                from omega.graphs import generate_embedding, is_embedding_degraded
+                from omega.embedding import generate_embedding, is_embedding_degraded
 
                 query_emb = generate_embedding(query_text)
                 if is_embedding_degraded() and not getattr(self, "_hash_fallback_warned", False):
@@ -1798,7 +1798,7 @@ class SQLiteStore:
         # Try vector search first
         if self._vec_available:
             try:
-                from omega.graphs import generate_embedding
+                from omega.embedding import generate_embedding
 
                 query_emb = generate_embedding(query)
                 if query_emb:
@@ -2081,7 +2081,7 @@ class SQLiteStore:
         items_needing = [(i, item) for i, item in enumerate(items) if item.get("embedding") is None]
         if items_needing:
             try:
-                from omega.graphs import generate_embeddings_batch, get_active_backend
+                from omega.embedding import generate_embeddings_batch, get_active_backend
 
                 texts = [item["content"] for _, item in items_needing]
                 embeddings = generate_embeddings_batch(texts)
@@ -2121,12 +2121,12 @@ class SQLiteStore:
 
         Returns dict with counts of updated, skipped, and failed nodes.
         """
-        from omega.graphs import generate_embeddings_batch, get_active_backend
+        from omega.embedding import generate_embeddings_batch, get_active_backend
 
         backend = get_active_backend()
         if backend is None:
             # Force a load attempt
-            from omega.graphs import _get_embedding_model
+            from omega.embedding import _get_embedding_model
 
             _get_embedding_model()
             backend = get_active_backend()

@@ -41,7 +41,7 @@ class TestPackageImport:
 @contextmanager
 def _skip_embeddings():
     """Context manager that skips embeddings and resets the circuit breaker after."""
-    from omega.graphs import reset_embedding_state
+    from omega.embedding import reset_embedding_state
     os.environ["OMEGA_SKIP_EMBEDDINGS"] = "1"
     try:
         yield

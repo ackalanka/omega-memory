@@ -21,7 +21,7 @@ class TTLCategory:
 
     EPHEMERAL = 3600  # 1 hour - temporary context, scratch data
     SHORT_TERM = 86400  # 1 day - blocked context, daily work
-    LONG_TERM = 1209600  # 2 weeks - summaries, task completions, decisions
+    LONG_TERM = 7776000  # 90 days - summaries, task completions, git events
     PERMANENT = None  # Never expires - lessons, preferences, error patterns
 
     @classmethod
@@ -41,6 +41,7 @@ class AutoCaptureEventType:
     DECISION = "decision"
     BLOCKED_CONTEXT = "blocked_context"
     USER_PREFERENCE = "user_preference"
+    USER_FACT = "user_fact"
     ADVISOR_INSIGHT = "advisor_insight"
 
     # Git events
@@ -57,23 +58,38 @@ class AutoCaptureEventType:
     # Coordination events
     COORDINATION_SNAPSHOT = "coordination_snapshot"
 
+    # Bootstrap events
+    PROJECT_CONTEXT = "project_context"
+
+    # Guardrail events
+    CONSTRAINT = "constraint"
+
     # Context virtualization
     CHECKPOINT = "checkpoint"
 
     # Proactive reminders
     REMINDER = "reminder"
 
+    # Behavioral pattern inference
+    BEHAVIORAL_PATTERN = "behavioral_pattern"
+
+    # Experiential memory: distilled session trajectories
+    SKILL_TEMPLATE = "skill_template"
+
+    # Cross-session project continuity
+    PROJECT_STATUS = "project_status"
+
 
 # Map event types to TTL categories
 EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
-    AutoCaptureEventType.SESSION_SUMMARY: TTLCategory.EPHEMERAL,  # 1 hour: available during session, don't accumulate
+    AutoCaptureEventType.SESSION_SUMMARY: TTLCategory.LONG_TERM,  # 90 days: cross-session context carrier
     AutoCaptureEventType.TASK_COMPLETION: TTLCategory.LONG_TERM,
     AutoCaptureEventType.ERROR_PATTERN: TTLCategory.PERMANENT,
     AutoCaptureEventType.LESSON_LEARNED: TTLCategory.PERMANENT,
-    AutoCaptureEventType.DECISION: TTLCategory.LONG_TERM,
+    AutoCaptureEventType.DECISION: TTLCategory.PERMANENT,  # Architectural knowledge, never expires
     AutoCaptureEventType.BLOCKED_CONTEXT: TTLCategory.SHORT_TERM,
     AutoCaptureEventType.USER_PREFERENCE: TTLCategory.PERMANENT,
-    AutoCaptureEventType.ADVISOR_INSIGHT: TTLCategory.LONG_TERM,
+    AutoCaptureEventType.ADVISOR_INSIGHT: TTLCategory.PERMANENT,  # System insights = permanent knowledge
     AutoCaptureEventType.GIT_COMMIT: TTLCategory.LONG_TERM,
     AutoCaptureEventType.GIT_MERGE: TTLCategory.LONG_TERM,
     AutoCaptureEventType.GIT_CONFLICT: TTLCategory.PERMANENT,
@@ -82,6 +98,8 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     AutoCaptureEventType.CONTEXT_WARNING: TTLCategory.SHORT_TERM,
     AutoCaptureEventType.BUDGET_ALERT: TTLCategory.LONG_TERM,
     AutoCaptureEventType.COORDINATION_SNAPSHOT: TTLCategory.SHORT_TERM,
+    AutoCaptureEventType.PROJECT_CONTEXT: TTLCategory.PERMANENT,
+    AutoCaptureEventType.PROJECT_STATUS: TTLCategory.PERMANENT,  # Cross-session project continuity
     # User-facing types (from legacy/migration)
     "user_fact": TTLCategory.PERMANENT,  # Facts about the user (similar to user_preference)
     "user_prompt": TTLCategory.LONG_TERM,  # Captured user prompts
@@ -90,7 +108,7 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     "sota_research": TTLCategory.PERMANENT,
     "research_report": TTLCategory.PERMANENT,
     "preference_generated": TTLCategory.PERMANENT,
-    # Long-term (2 weeks)
+    # Long-term (90 days)
     "reflexion": TTLCategory.LONG_TERM,
     "outcome_evaluation": TTLCategory.LONG_TERM,
     "self_reflection": TTLCategory.LONG_TERM,
@@ -98,11 +116,17 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     "benchmark_update": TTLCategory.LONG_TERM,
     "file_conflict": TTLCategory.LONG_TERM,
     "session_respawn": TTLCategory.LONG_TERM,
-    "memory": TTLCategory.SHORT_TERM,  # Generic type with no query path; expire quickly
+    "memory": TTLCategory.LONG_TERM,  # Generic fallback type for auto_capture; retain 90 days
     # Context virtualization (7 days)
     AutoCaptureEventType.CHECKPOINT: 604800,  # 7 days
     # Proactive reminders (permanent until dismissed)
     AutoCaptureEventType.REMINDER: None,
+    # Guardrail constraints (permanent -- always enforced)
+    AutoCaptureEventType.CONSTRAINT: TTLCategory.PERMANENT,
+    # Trajectory distillation (permanent -- ACT-R decay handles pruning)
+    AutoCaptureEventType.SKILL_TEMPLATE: TTLCategory.PERMANENT,
+    # Behavioral pattern inference
+    AutoCaptureEventType.BEHAVIORAL_PATTERN: TTLCategory.PERMANENT,
     # Short-term (1 day)
     "sota_scan": TTLCategory.SHORT_TERM,
     "merge_claim": TTLCategory.SHORT_TERM,

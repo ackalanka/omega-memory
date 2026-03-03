@@ -610,8 +610,79 @@ def _jaccard(text_a: str, text_b: str, min_word_len: int = 4) -> float:
     return len(words_a & words_b) / len(words_a | words_b)
 
 
-def _auto_relate(store, node_id: str, max_related: int = 3, min_similarity: float = 0.45) -> int:
-    """Create 'related' edges from node_id to its most similar existing memories.
+def _extract_facts(content: str) -> List[str]:
+    """Extract atomic facts from content for multi-key retrieval (no LLM).
+
+    Extracts:
+    - Technical terms (CamelCase, UPPER_CASE, dotted.paths)
+    - Quoted strings and backtick-delimited tokens
+    - Decision verbs with their objects ("chose X", "switched to Y")
+    - Key noun phrases from short sentences
+
+    Returns deduplicated list of fact strings, capped at 20.
+    """
+    facts: set = set()
+
+    # 1. CamelCase identifiers (e.g., SQLiteStore, MemoryResult)
+    for m in re.findall(r"\b([A-Z][a-zA-Z]*[a-z][A-Z][a-zA-Z]*)\b", content):
+        facts.add(m.lower())
+
+    # 2. UPPER_CASE constants (e.g., MAX_NODES, API_KEY)
+    for m in re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", content):
+        facts.add(m.lower())
+
+    # 3. Backtick-delimited tokens (e.g., `jwt`, `sqlite_store.py`)
+    for m in re.findall(r"`([^`]{2,40})`", content):
+        facts.add(m.lower().strip())
+
+    # 4. Quoted strings (e.g., "refresh token", 'auth method')
+    for m in re.findall(r"""["']([^"']{2,40})["']""", content):
+        facts.add(m.lower().strip())
+
+    # 5. Decision/action verb phrases — extract the object of key verbs
+    _DECISION_VERBS = (
+        r"(?:chose|choose|decided|switched?\s+to|migrated?\s+to|"
+        r"replaced?\s+with|use[ds]?|adopted?|selected?|"
+        r"implemented?|configured?|set\s+up|enabled?|disabled?)"
+    )
+    for m in re.finditer(
+        rf"\b{_DECISION_VERBS}\s+([A-Za-z0-9][\w\s./-]{{1,30}}?)(?:[.,;!?\n]|$)",
+        content, re.IGNORECASE,
+    ):
+        phrase = m.group(1).strip().rstrip(".")
+        if len(phrase) > 2:
+            facts.add(phrase.lower())
+
+    # 6. Dotted paths / module references (e.g., omega.sqlite_store, src/omega)
+    for m in re.findall(r"\b([\w]+(?:\.[\w]+){1,4})\b", content):
+        if not re.match(r"^\d+\.\d+", m):  # Skip version numbers like 1.0.0
+            facts.add(m.lower())
+
+    # 7. Technical compound terms (hyphenated, e.g., "multi-session", "cross-agent")
+    for m in re.findall(r"\b([a-z]+-[a-z]+(?:-[a-z]+)?)\b", content.lower()):
+        if len(m) > 4:
+            facts.add(m)
+
+    # Filter out very short or stopword-only facts
+    _STOP = {"the", "and", "for", "with", "that", "this", "from", "have", "been", "will", "not"}
+    filtered = []
+    for f in facts:
+        words = f.split()
+        meaningful = [w for w in words if w not in _STOP and len(w) > 1]
+        if meaningful:
+            filtered.append(f)
+
+    return sorted(set(filtered))[:20]
+
+
+def _auto_relate(store, node_id: str, max_related: int = 3, min_similarity: float = 0.65) -> int:
+    """Create typed edges from node_id to its most similar existing memories.
+
+    Edge types are inferred from metadata signals:
+      - same_entity: both memories share the same entity_id
+      - evolution: same event_type with high similarity (concept update)
+      - temporal_cluster: created within 1 hour of each other
+      - related: fallback for very high similarity (>= 0.80) with no stronger type
 
     Returns the number of edges created. Silently returns 0 on any error.
     """
@@ -620,17 +691,177 @@ def _auto_relate(store, node_id: str, max_related: int = 3, min_similarity: floa
         if not embedding:
             return 0
         similar = store.find_similar(embedding, limit=max_related + 1)
-        related = [r for r in similar if r.id != node_id and r.relevance >= min_similarity][:max_related]
+        candidates = [r for r in similar if r.id != node_id and r.relevance >= min_similarity][:max_related]
+        if not candidates:
+            return 0
+
+        source_node = store.get_node(node_id)
+        if not source_node:
+            return 0
+        src_meta = source_node.metadata or {}
+        src_entity = src_meta.get("entity_id", "")
+        src_event = src_meta.get("event_type", "")
+        src_created = source_node.created_at
+
         count = 0
-        for r in related:
-            if store.add_edge(node_id, r.id, "related", r.relevance):
+        for r in candidates:
+            r_meta = r.metadata or {}
+            r_entity = r_meta.get("entity_id", "")
+            r_event = r_meta.get("event_type", "")
+
+            # Classify edge type from strongest to weakest signal
+            if src_entity and r_entity and src_entity == r_entity:
+                edge_type = "same_entity"
+            elif src_event and r_event and src_event == r_event and r.relevance >= 0.75:
+                edge_type = "evolution"
+            elif src_created and r.created_at:
+                delta = abs((src_created - r.created_at).total_seconds())
+                if delta <= 3600:
+                    edge_type = "temporal_cluster"
+                elif r.relevance >= 0.80:
+                    edge_type = "related"
+                else:
+                    continue  # Below 0.80 with no typed signal: skip
+            elif r.relevance >= 0.80:
+                edge_type = "related"
+            else:
+                continue  # No strong signal: skip the generic edge
+
+            if store.add_edge(node_id, r.id, edge_type, r.relevance):
                 count += 1
         if count:
-            logger.debug(f"Auto-related {node_id[:12]} to {count} memories")
+            logger.debug(f"Auto-related {node_id[:12]} to {count} memories (typed)")
         return count
     except Exception as e:
         logger.debug(f"_auto_relate failed for {node_id[:12]}: {e}")
         return 0
+
+
+_CROSS_TYPE_SUPERSEDE = {
+    "user_preference": {"decision"},
+}
+
+
+def _detect_and_supersede(
+    store, node_id: str, content: str, event_type: str,
+    entity_id: Optional[str] = None,
+) -> int:
+    """Detect contradicting memories and mark old ones as superseded.
+
+    Only runs for decision, user_preference, user_fact types.
+    Uses embedding similarity to find candidates, then checks for topic
+    overlap with different content — indicating a contradiction/update.
+
+    Cross-type supersession: user_preference can supersede decision memories
+    (e.g. "stop suggesting HN" supersedes "post Show HN on Tuesday").
+
+    Returns count of superseded memories.
+    """
+    _SUPERSEDE_TYPES = {"decision", "user_preference", "user_fact"}
+    if event_type not in _SUPERSEDE_TYPES:
+        return 0
+    try:
+        embedding = store.get_embedding(node_id)
+        if not embedding:
+            return 0
+        similar = store.find_similar(embedding, limit=5)
+        superseded = 0
+        content_norm = content[:100].strip().lower()
+        cross_targets = _CROSS_TYPE_SUPERSEDE.get(event_type)
+        for r in similar:
+            if r.id == node_id:
+                continue
+            if (r.metadata or {}).get("superseded"):
+                continue
+            r_type = (r.metadata or {}).get("event_type", "")
+            if r_type != event_type:
+                if not cross_targets or r_type not in cross_targets:
+                    continue
+            if r.relevance < 0.80:
+                continue
+            if entity_id:
+                r_entity = (r.metadata or {}).get("entity_id", "")
+                if r_entity and r_entity != entity_id:
+                    continue
+            existing_norm = r.content[:100].strip().lower()
+            if content_norm == existing_norm:
+                continue
+            store.mark_superseded(r.id, superseded_by=node_id)
+            store.add_edge(node_id, r.id, "supersedes", r.relevance)
+            superseded += 1
+            logger.info(
+                "Ingest superseded %s (sim=%.2f) by %s",
+                r.id[:12], r.relevance, node_id[:12],
+            )
+        if superseded:
+            store.stats.setdefault("ingest_superseded", 0)
+            store.stats["ingest_superseded"] += superseded
+        return superseded
+    except Exception as e:
+        logger.debug("_detect_and_supersede failed for %s: %s", node_id[:12], e)
+        return 0
+
+
+def _split_atomic_facts(content: str, event_type: str) -> List[str]:
+    """Extract sentence-level atomic facts from content.
+
+    Identifies standalone factual statements for storage as separate
+    user_fact nodes to improve single-mention recall.
+
+    Returns list of fact strings (max 5).
+    """
+    if len(content) < 50:
+        return []
+    _FACT_SPLIT_TYPES = {
+        "decision", "user_fact",
+    }
+    if event_type not in _FACT_SPLIT_TYPES:
+        return []
+    facts = []
+    sentences = re.split(r"(?<=[.!?])\s+", content)
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if len(sentence) < 15 or len(sentence) > 200:
+            continue
+        s_lower = sentence.lower()
+        _has_user_signal = bool(re.search(
+            r"\b(?:we|our|my|i)\s+|"
+            r"\b(?:the|our)\s+(?:db|database|server|api|config|project|repo|app|service|endpoint|url|path|port)\b",
+            s_lower,
+        ))
+        if not _has_user_signal:
+            continue
+        if re.search(r"\b(?:is|are|was|were)\s+\w", s_lower):
+            facts.append(sentence)
+            continue
+        if re.search(
+            r"\b(?:we\s+use|using|uses?|adopted?|switched?\s+to)\s+\w",
+            s_lower,
+        ):
+            facts.append(sentence)
+            continue
+        if re.search(
+            r"\b(?:moved?\s+to|lives?\s+in|located?\s+(?:in|at)"
+            r"|based\s+in)\s+\w",
+            s_lower,
+        ):
+            facts.append(sentence)
+            continue
+        if re.search(
+            r"\b(?:password|key|token|secret|api.?key)"
+            r"\s+(?:is|=|:)\s*\S",
+            s_lower,
+        ):
+            facts.append(sentence)
+            continue
+    seen = set()
+    unique = []
+    for f in facts:
+        f_norm = f.strip().lower()
+        if f_norm not in seen:
+            seen.add(f_norm)
+            unique.append(f)
+    return unique[:5]
 
 
 # ---------------------------------------------------------------------------
@@ -678,7 +909,9 @@ def auto_capture(
             return "**Memory Blocked** (system noise)"
     # Contains patterns only apply to hook-sourced content to avoid false positives
     # on direct API calls (e.g. storing a lesson that mentions "error":).
-    if _is_hook:
+    # Also skip for preference/fact types — users legitimately store prefs containing "error".
+    _BLOCKLIST_EXEMPT_TYPES = {AutoCaptureEventType.USER_PREFERENCE, AutoCaptureEventType.USER_FACT}
+    if _is_hook and event_type not in _BLOCKLIST_EXEMPT_TYPES:
         for pattern in _BLOCKLIST_CONTAINS:
             if pattern in content:
                 return "**Memory Blocked** (system noise)"
@@ -738,6 +971,19 @@ def auto_capture(
         existing_tags = meta.get("tags", [])
         meta["tags"] = sorted(set(existing_tags + auto_tags))[:15]
 
+    # Fact extraction for high-value types — creates additional retrieval keys
+    _FACT_EXTRACTION_TYPES = {"decision", "lesson_learned", "session_summary", "error_pattern", "advisor_insight"}
+    if event_type in _FACT_EXTRACTION_TYPES:
+        try:
+            facts = _extract_facts(content)
+            if facts:
+                meta["facts"] = facts
+                existing_tags = meta.get("tags", [])
+                fact_tags = [f for f in facts if len(f) <= 25 and " " not in f]
+                meta["tags"] = sorted(set(existing_tags + fact_tags))[:20]
+        except Exception as e:
+            logger.debug(f"Fact extraction failed: {e}")
+
     ttl = ttl_override if ttl_override is not None else TTLCategory.for_event_type(event_type)
 
     # ------------------------------------------------------------------
@@ -761,8 +1007,14 @@ def auto_capture(
                 if (existing.metadata or {}).get("event_type", "") != event_type:
                     continue
                 # Session filter for dedup: only dedup within same session
-                # Exception: decisions dedup cross-session (same architectural choice restated)
-                if session_id and event_type != AutoCaptureEventType.DECISION:
+                # Exception: decisions, lessons, and task completions dedup cross-session
+                _CROSS_SESSION_DEDUP_TYPES = {
+                    AutoCaptureEventType.DECISION,
+                    AutoCaptureEventType.LESSON_LEARNED,
+                    AutoCaptureEventType.TASK_COMPLETION,
+                    AutoCaptureEventType.ADVISOR_INSIGHT,
+                }
+                if session_id and event_type not in _CROSS_SESSION_DEDUP_TYPES:
                     existing_session = (existing.metadata or {}).get("session_id", "")
                     if existing_session and existing_session != session_id:
                         continue
@@ -812,8 +1064,16 @@ def auto_capture(
                 if EVOLUTION_THRESHOLD <= sim < (dedup_threshold or 0.95):
                     old_words = {w.lower() for w in existing.content.split() if len(w) > 3}
                     new_info = {w.lower() for w in content.split() if len(w) > 3} - old_words
-                    if len(new_info) < 3:
-                        continue
+                    if len(new_info) == 0:
+                        # Near-exact reconfirmation — bump access count to strengthen memory
+                        store.update_node(
+                            existing.id,
+                            access_count=(existing.access_count or 0) + 1,
+                        )
+                        store.stats.setdefault("reconfirmation_bumps", 0)
+                        store.stats["reconfirmation_bumps"] += 1
+                        return f"Reconfirmed {existing.id[:12]} (access bumped)"
+                    # Allow evolution with even 1 new word (was 3 — caused dead zone)
 
                     evolved = existing.content.rstrip()
                     if not evolved.endswith("."):
@@ -911,6 +1171,49 @@ def auto_capture(
     linked = _auto_relate(store, node_id)
     if linked:
         output += f"**Related:** {linked} linked\n"
+
+    # ------------------------------------------------------------------
+    # Phase 4.1: Contradiction detection — supersede old conflicting memories
+    # ------------------------------------------------------------------
+    try:
+        supersede_count = _detect_and_supersede(
+            store, node_id, content, event_type, entity_id,
+        )
+        if supersede_count:
+            output += f"**Superseded:** {supersede_count} outdated\n"
+    except Exception as e:
+        logger.debug(f"Contradiction detection failed for {node_id[:12]}: {e}")
+
+    # ------------------------------------------------------------------
+    # Phase 4.2: Atomic fact splitting — create sub-nodes for recall
+    # ------------------------------------------------------------------
+    try:
+        atomic_facts = _split_atomic_facts(content, event_type)
+        fact_count = 0
+        for fact_text in atomic_facts:
+            fact_meta = {
+                "event_type": "user_fact",
+                "source_node": node_id,
+                "auto_extracted": True,
+            }
+            if session_id:
+                fact_meta["session_id"] = session_id
+            if project:
+                fact_meta["project"] = project
+            if entity_id:
+                fact_meta["entity_id"] = entity_id
+            fact_id = store.store(
+                content=fact_text,
+                session_id=session_id,
+                metadata=fact_meta,
+                entity_id=entity_id,
+            )
+            store.add_edge(node_id, fact_id, "contains_fact", 1.0)
+            fact_count += 1
+        if fact_count:
+            output += f"**Facts:** {fact_count} extracted\n"
+    except Exception as e:
+        logger.debug(f"Atomic fact splitting failed for {node_id[:12]}: {e}")
 
     # ------------------------------------------------------------------
     # Phase 5: Milestone celebrations
@@ -1019,14 +1322,23 @@ def query(
     temporal_range: Optional[tuple] = None,
     entity_id: Optional[str] = None,
     agent_type: Optional[str] = None,
+    scope: Optional[str] = None,
+    surfacing_context: Optional[Any] = None,
+    perspective: Optional[str] = None,
+    strength_min: Optional[float] = None,
+    memory_type: Optional[str] = None,
+    include_contradicted: bool = False,
+    valid_at: Optional[str] = None,
 ) -> str:
     """Search memories with optional intent-aware routing.
 
     Args:
         context_file: Current file being edited (for contextual re-ranking).
         context_tags: Current context tags like language, tools (for re-ranking boost).
-        filter_tags: Hard filter — only return memories containing ALL specified tags.
+        filter_tags: Hard filter -- only return memories containing ALL specified tags.
         temporal_range: Optional (start_iso, end_iso) tuple. Auto-inferred from query if not given.
+        surfacing_context: SurfacingContext enum for context-aware scoring.
+        strength_min: Minimum strength score (0.0-1.0). Filters out weak/decayed memories.
 
     Returns:
         Formatted markdown string with results.
@@ -1037,6 +1349,8 @@ def query(
     try:
         # Auto-infer temporal range from query text if not explicitly provided
         effective_temporal = temporal_range or _infer_temporal_range(query_text)
+        # When range was auto-inferred, use soft scoring (boost only, no harsh penalty)
+        _temporal_boost_only = temporal_range is None and effective_temporal is not None
 
         enhanced = query_text
         if event_type:
@@ -1044,17 +1358,22 @@ def query(
         if project:
             enhanced = f"{Path(project).name} {enhanced}"
 
-        results = db.query(
-            enhanced,
-            limit=limit * 2 if (filter_tags or entity_id or agent_type) else limit,
-            session_id=session_id,
-            context_file=context_file or "",
-            context_tags=context_tags,
-            temporal_range=effective_temporal,
-            entity_id=entity_id,
-            agent_type=agent_type,
-            query_hint=event_type,
-        )
+        # Pass scope through to store; "session" restricts to caller's session
+        _scope = scope if scope in ("project", "session") else "project"
+        query_kwargs: Dict[str, Any] = {
+            "limit": limit * 3 if (filter_tags or entity_id or agent_type) else limit,
+            "session_id": session_id,
+            "context_file": context_file or "",
+            "context_tags": context_tags,
+            "temporal_range": effective_temporal,
+            "entity_id": entity_id,
+            "agent_type": agent_type,
+            "query_hint": event_type,
+            "scope": _scope,
+        }
+        if surfacing_context is not None:
+            query_kwargs["surfacing_context"] = surfacing_context
+        results = db.query(enhanced, **query_kwargs)
 
         # Filter by event_type if specified
         if event_type and results:
@@ -1093,7 +1412,7 @@ def query(
 
         # Warn if embedding model is degraded (hash fallback active)
         try:
-            from omega.graphs import is_embedding_degraded
+            from omega.embedding import is_embedding_degraded
             if is_embedding_degraded() and results:
                 output += "\n**Note:** Semantic search is degraded (embedding model unavailable). Results are text-match only.\n"
         except Exception:
@@ -1322,7 +1641,7 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
 
     # Check for missing embedding model files (not backend activation — model is lazy-loaded)
     warnings = []
-    from omega.graphs import _get_onnx_model_dir, has_onnx_runtime, has_sentence_transformers
+    from omega.embedding import _get_onnx_model_dir, has_onnx_runtime, has_sentence_transformers
     if has_onnx_runtime() and _get_onnx_model_dir() is None and not has_sentence_transformers():
         warnings.append(
             "Embedding model not found — semantic search will be disabled. "

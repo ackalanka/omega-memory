@@ -47,7 +47,7 @@ def tmp_omega_dir_encrypted(tmp_path):
 def _reset_embeddings_after_test():
     """Reset embedding circuit-breaker after every test to prevent state leaks."""
     yield
-    from omega.graphs import reset_embedding_state
+    from omega.embedding import reset_embedding_state
     reset_embedding_state()
 
 

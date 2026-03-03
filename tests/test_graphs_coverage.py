@@ -7,13 +7,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
-import omega.graphs as graphs
-from omega.graphs import (
+import omega.embedding as graphs
+from omega.embedding import (
     get_embedding_model_info,
     reset_embedding_state,
     _maybe_unload_model,
     _check_onnx_runtime,
-    _check_sentence_transformers,
     _hash_embedding,
     generate_embedding,
     generate_embeddings_batch,
@@ -82,7 +81,7 @@ class TestResetEmbeddingState:
 
     def test_resets_circuit_breaker(self, monkeypatch):
         monkeypatch.setattr(graphs, "_FIRST_FAILURE_TIME", 12345.0)
-        from omega.graphs import _get_embedding_model
+        from omega.embedding import _get_embedding_model
         _get_embedding_model._attempt_count = 3
         reset_embedding_state()
         assert graphs._FIRST_FAILURE_TIME == 0.0
@@ -172,26 +171,15 @@ class TestCheckOnnxRuntime:
 
 
 # ---------------------------------------------------------------------------
-# 5. _check_sentence_transformers — caching
+# 5. has_sentence_transformers — stub in community edition
 # ---------------------------------------------------------------------------
 
-class TestCheckSentenceTransformers:
-    """Test sentence_transformers availability check with caching."""
+class TestHasSentenceTransformers:
+    """Test sentence_transformers availability (stub returns False)."""
 
-    def test_caches_result(self, monkeypatch):
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
-        result1 = _check_sentence_transformers()
-        assert graphs._SENTENCE_TRANSFORMERS_CHECKED is True
-        # Modify cached value and verify second call uses it
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", not result1)
-        result2 = _check_sentence_transformers()
-        assert result2 == (not result1)
-
-    def test_returns_bool(self, monkeypatch):
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", False)
-        result = _check_sentence_transformers()
-        assert isinstance(result, bool)
+    def test_returns_false(self):
+        from omega.embedding import has_sentence_transformers
+        assert has_sentence_transformers() is False
 
 
 # ---------------------------------------------------------------------------
@@ -254,8 +242,7 @@ class TestGenerateEmbedding:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         emb = generate_embedding("test text")
         assert len(emb) == 384
         # Should match the hash fallback output
@@ -266,8 +253,7 @@ class TestGenerateEmbedding:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         emb = generate_embedding("hello")
         assert isinstance(emb, list)
         assert all(isinstance(v, float) for v in emb)
@@ -277,8 +263,7 @@ class TestGenerateEmbedding:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         emb1 = generate_embedding("cached text")
         emb2 = generate_embedding("cached text")
         assert emb1 == emb2
@@ -287,8 +272,7 @@ class TestGenerateEmbedding:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         emb = generate_embedding("")
         assert len(emb) == 384
 
@@ -309,8 +293,7 @@ class TestGenerateEmbeddingsBatch:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         texts = ["hello", "world", "test"]
         results = generate_embeddings_batch(texts)
         assert len(results) == 3
@@ -325,8 +308,7 @@ class TestGenerateEmbeddingsBatch:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         texts = ["alpha", "beta"]
         batch_results = generate_embeddings_batch(texts)
         individual_results = [_hash_embedding(t) for t in texts]
@@ -336,8 +318,7 @@ class TestGenerateEmbeddingsBatch:
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         results = generate_embeddings_batch(["only one"])
         assert len(results) == 1
         assert len(results[0]) == 384
@@ -414,8 +395,7 @@ class TestPreloadEmbeddingModel:
         """If neither ONNX nor sentence-transformers available, return False."""
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         result = preload_embedding_model()
         assert result is False
 
@@ -444,8 +424,7 @@ class TestAuxiliary:
         monkeypatch.setattr(graphs, "_EMBEDDING_MODEL", None)
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_CHECKED", True)
-        monkeypatch.setattr(graphs, "_SENTENCE_TRANSFORMERS_AVAILABLE", False)
+
         assert _has_embedding_backend() is False
 
     def test_hash_embedding_dimension_one(self):
@@ -464,27 +443,27 @@ class TestGetEmbeddingInfo:
     """Test get_embedding_info() returns correct structure and values."""
 
     def test_returns_expected_keys(self):
-        from omega.graphs import get_embedding_info
+        from omega.embedding import get_embedding_info
         info = get_embedding_info()
         expected_keys = {
             "backend", "model", "model_loaded", "onnx_available",
-            "onnx_model_dir", "sentence_transformers_available",
+            "onnx_model_dir",
             "dimension", "cache_size", "lazy_loading",
         }
         assert set(info.keys()) == expected_keys
 
     def test_dimension_is_384(self):
-        from omega.graphs import get_embedding_info
+        from omega.embedding import get_embedding_info
         info = get_embedding_info()
         assert info["dimension"] == 384
 
     def test_lazy_loading_true(self):
-        from omega.graphs import get_embedding_info
+        from omega.embedding import get_embedding_info
         info = get_embedding_info()
         assert info["lazy_loading"] is True
 
     def test_reflects_cache_size(self, monkeypatch):
-        from omega.graphs import get_embedding_info
+        from omega.embedding import get_embedding_info
         monkeypatch.setattr(graphs, "_EMBEDDING_CACHE", {"a": [0.1], "b": [0.2]})
         info = get_embedding_info()
         assert info["cache_size"] == 2

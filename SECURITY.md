@@ -1,41 +1,44 @@
 # Security Policy
 
-## Reporting a Vulnerability
-
-If you discover a security vulnerability in OMEGA, please report it responsibly.
-
-**Do NOT open a public GitHub issue for security vulnerabilities.**
-
-Instead, email us at: **omega-memory@proton.me**
-
-Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Potential impact
-- Suggested fix (if any)
-
-We will acknowledge receipt within 48 hours and provide a timeline for a fix. We aim to release a patch within 90 days of a confirmed vulnerability. We follow coordinated disclosure — we will work with you on timing before any public announcement. We are happy to credit reporters in the release notes unless you prefer to remain anonymous.
-
-## Scope
-
-This policy covers the `omega-memory` Python package and its MCP server. Vulnerabilities in third-party dependencies should be reported to the respective maintainers, though we welcome a heads-up if you believe a dependency vulnerability affects OMEGA users.
-
 ## Supported Versions
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.8.x   | Yes                |
-| 0.7.x   | Yes                |
-| 0.6.x   | Yes                |
-| 0.5.x   | Yes                |
-| < 0.5   | No                 |
+| 0.10.x  | Yes                |
+| < 0.10  | No                 |
 
-## Security Design
+## Reporting a Vulnerability
 
-OMEGA is designed with security in mind:
+If you discover a security vulnerability in OMEGA, please report it responsibly.
 
-- **Local-first**: All data stays on your machine by default. No external network calls for core functionality.
-- **Encryption at rest**: Optional AES-256-GCM encryption for stored memories (`OMEGA_ENCRYPT=1`).
-- **File permissions**: Database and key files are created with `0o600` permissions.
-- **No credential storage**: OMEGA never stores API keys or credentials in its database.
-- **Rate limiting**: The MCP server includes built-in rate limiting to prevent abuse.
+**Do NOT open a public issue.**
+
+Instead, use one of these methods:
+
+1. **GitHub Security Advisories** (preferred): Go to the [Security Advisories page](https://github.com/omega-memory/omega-memory/security/advisories/new) and create a private advisory.
+2. **Email**: Contact the maintainers at hello@omega-memory.dev.
+
+### What to include
+
+- Description of the vulnerability
+- Steps to reproduce
+- Affected versions
+- Potential impact
+
+### Response timeline
+
+- **Acknowledgment**: Within 48 hours
+- **Initial assessment**: Within 1 week
+- **Fix or mitigation**: Depends on severity, targeting within 2 weeks for critical issues
+
+### Scope
+
+This policy covers the `omega-memory` Python package only. Issues with Claude Code itself should be reported to [Anthropic](https://github.com/anthropics/claude-code/issues).
+
+### Security design
+
+- All SQL queries use parameterized statements (no string interpolation)
+- File paths are validated against traversal attacks on export/import
+- The optional encryption layer uses `cryptography` with `secrets.token_bytes()` for key generation
+- The encryption key is stored at `~/.omega/.key` with restricted permissions
+- The UDS hook socket is created with mode `0o600`

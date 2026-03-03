@@ -263,7 +263,7 @@ def _migrate_into_store(
     if items_needing_embedding:
         print(f"  Generating embeddings for {len(items_needing_embedding)} nodes...")
         try:
-            from omega.graphs import generate_embedding
+            from omega.embedding import generate_embedding
 
             done = 0
             for idx in items_needing_embedding:

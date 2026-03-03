@@ -334,7 +334,7 @@ class TestBatchOps:
         store.store(content="Cooking recipes for dinner")
 
         # find_similar takes an embedding vector, not text — generate one
-        from omega.graphs import generate_embedding
+        from omega.embedding import generate_embedding
         emb = generate_embedding("Python code")
         results = store.find_similar(emb, limit=5)
         # Should return results
@@ -665,7 +665,7 @@ class TestCircuitBreakerCooldown:
     def test_circuit_breaker_cooldown_recovery(self):
         """After cooldown expires, circuit breaker allows fresh attempts."""
         from unittest.mock import patch
-        from omega.graphs import (
+        from omega.embedding import (
             _get_embedding_model, reset_embedding_state,
             _time_module,
         )
@@ -695,7 +695,7 @@ class TestCircuitBreakerCooldown:
 
     def test_circuit_breaker_stays_tripped_before_cooldown(self):
         """Before cooldown expires, circuit breaker remains tripped."""
-        from omega.graphs import _get_embedding_model, reset_embedding_state
+        from omega.embedding import _get_embedding_model, reset_embedding_state
 
         reset_embedding_state()
         os.environ["OMEGA_SKIP_EMBEDDINGS"] = "1"

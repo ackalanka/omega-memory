@@ -2,6 +2,8 @@
 
 import argparse
 import json
+import logging
+import os
 import re
 import shutil
 import subprocess
@@ -9,6 +11,14 @@ import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+logger = logging.getLogger("omega.cli")
+
+
+def _use_json(args) -> bool:
+    """Check if JSON output requested via --json flag or OMEGA_JSON=1 env var."""
+    return getattr(args, "json", False) or os.environ.get("OMEGA_JSON") == "1"
+
 
 OMEGA_DIR = Path.home() / ".omega"
 OMEGA_CACHE = Path.home() / ".cache" / "omega"
@@ -96,8 +106,8 @@ def _has_extended_modules() -> bool:
         for plugin in discover_plugins():
             if plugin.HOOKS_JSON:
                 return True
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Plugin discovery failed: %s", e)
     return False
 
 
@@ -406,7 +416,7 @@ def cmd_query(args):
                 print(f'No results for "{query_text}" ({elapsed:.2f}s)')
 
             # Warn if semantic search is degraded
-            from omega.graphs import get_active_backend
+            from omega.embedding import get_active_backend
             if get_active_backend() is None:
                 print(
                     "\n  NOTE: Semantic search unavailable — results use text matching only.",
@@ -440,8 +450,11 @@ def cmd_store(args):
 
     from omega.bridge import store
 
-    store(content=content, event_type=event_type)
-    print(f"Stored [{cli_type}]: {content[:80]}")
+    result = store(content=content, event_type=event_type)
+    if _use_json(args):
+        print(json.dumps({"stored": True, "type": cli_type, "content": content[:200]}))
+    else:
+        print(f"Stored [{cli_type}]: {content[:80]}")
 
 
 def cmd_remember(args):
@@ -454,7 +467,10 @@ def cmd_remember(args):
     from omega.bridge import remember
 
     remember(text=text)
-    print(f"Remembered: {text[:120]}")
+    if _use_json(args):
+        print(json.dumps({"remembered": True, "text": text[:200]}))
+    else:
+        print(f"Remembered: {text[:120]}")
 
 
 def cmd_timeline(args):
@@ -565,7 +581,8 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
         dst = hooks_dst / f"omega-{hook}"
         if src.exists():
             shutil.copy2(src, dst)
-            dst.chmod(0o755)
+            if sys.platform != "win32":
+                dst.chmod(0o755)
             print(f"  Installed hook: {dst.name}")
         else:
             print(f"  WARNING: Hook source not found: {src}")
@@ -1344,8 +1361,8 @@ def _send_notification(text: str, context: str = None):
             capture_output=True,
             timeout=5,
         )
-    except Exception:
-        pass  # Best-effort
+    except Exception as e:
+        logger.debug("Notification send failed: %s", e)
 
 
 def cmd_remind(args):
@@ -1506,8 +1523,8 @@ def cmd_validate(args):
         try:
             count = conn.execute(f"SELECT COUNT(*) FROM {tbl}").fetchone()[0]
             table_rows.append((tbl, str(count)))
-        except Exception:
-            pass  # Table may not exist
+        except Exception as e:
+            logger.debug("Table count failed for %s: %s", tbl, e)
     print_table(None, ["Table", "Count"], table_rows)
 
     conn.close()
@@ -1622,7 +1639,7 @@ def cmd_doctor(args):
         fixes_needed.append(("Download tokenizer", "omega setup"))
 
     try:
-        from omega.graphs import generate_embedding, get_embedding_info
+        from omega.embedding import generate_embedding, get_embedding_info
 
         info = get_embedding_info()
         if info.get("onnx_available"):
@@ -2165,7 +2182,7 @@ def main():
     query_parser.add_argument("query_text", nargs="+", help="Search text")
     query_parser.add_argument("--exact", action="store_true", help="Use FTS5 exact phrase search instead of semantic")
     query_parser.add_argument("--limit", type=int, default=10, help="Max results (default: 10)")
-    query_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    query_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     store_parser = subparsers.add_parser("store", help="Store a memory with a specified type")
     store_parser.add_argument("content", nargs="+", help="Memory content")
@@ -2176,13 +2193,15 @@ def main():
         choices=["memory", "lesson", "decision", "error", "task", "preference"],
         help="Memory type (default: memory)",
     )
+    store_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     remember_parser = subparsers.add_parser("remember", help="Store a permanent user preference")
     remember_parser.add_argument("text", nargs="+", help="Preference text")
+    remember_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     timeline_parser = subparsers.add_parser("timeline", help="Show memory timeline grouped by day")
     timeline_parser.add_argument("--days", type=int, default=7, help="Number of days to show (default: 7)")
-    timeline_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    timeline_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     # --- Admin commands ---
     setup_parser = subparsers.add_parser("setup", help="Set up OMEGA: download model, initialize DB")
@@ -2208,7 +2227,7 @@ def main():
     )
 
     status_parser = subparsers.add_parser("status", help="Show memory count, store size, model status")
-    status_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    status_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     doctor_parser = subparsers.add_parser("doctor", help="Verify installation: import, model, database")
     doctor_parser.add_argument("--client", choices=["claude-code"], help="Include client-specific checks (MCP, hooks)")
@@ -2245,10 +2264,10 @@ def main():
         "--dry-run", action="store_true", help="Show what would be compacted without changing data"
     )
     stats_parser = subparsers.add_parser("stats", help="Show memory type distribution and health summary")
-    stats_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    stats_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
     activity_parser = subparsers.add_parser("activity", help="Show recent session activity overview")
     activity_parser.add_argument("--days", type=int, default=7, help="Number of days to show (default: 7)")
-    activity_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    activity_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
     logs_parser = subparsers.add_parser("logs", help="Show recent hook errors from hooks.log")
     logs_parser.add_argument("-n", "--lines", type=int, default=50, help="Number of lines to show (default: 50)")
     validate_parser = subparsers.add_parser("validate", help="Validate omega.db integrity (SQLite + FTS5)")

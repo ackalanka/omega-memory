@@ -29,7 +29,7 @@ def test_handler_count():
         assert name in HANDLERS, f"Missing handler for schema: {name}"
     # Handlers may have aliases (backward compat) so len(HANDLERS) >= len(TOOL_SCHEMAS)
     assert len(HANDLERS) >= len(TOOL_SCHEMAS)
-    assert len(TOOL_SCHEMAS) == 12  # 12 consolidated action-discriminated composites
+    assert len(TOOL_SCHEMAS) == 14  # 14 consolidated action-discriminated composites
 
 
 # ============================================================================
@@ -566,5 +566,5 @@ def test_tool_schemas_docstring_count():
     import inspect
     source = inspect.getsource(ts)
     # Docstring says "12 tools"
-    assert "12 tools" in source
-    assert len(TOOL_SCHEMAS) == 12  # 12 consolidated action-discriminated composites
+    assert "14 tools" in source
+    assert len(TOOL_SCHEMAS) == 14  # 14 consolidated action-discriminated composites

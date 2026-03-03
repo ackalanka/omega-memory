@@ -10,6 +10,7 @@ import logging
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 try:
     from mcp.server import Server
@@ -76,6 +77,18 @@ def _wire_plugin_retrieval():
     except Exception:
         pass  # Store not ready yet; profiles will use built-in defaults
 
+# ---------------------------------------------------------------------------
+# Dedicated SQLite executor — serializes all blocking DB/hook work onto a
+# single thread, preventing the GIL+GC race in _pysqlite_query_execute that
+# caused SIGSEGV crashes under concurrent multi-thread SQLite access.
+# Also used as the default asyncio executor to cap thread growth.
+# ---------------------------------------------------------------------------
+_SQLITE_EXECUTOR = ThreadPoolExecutor(max_workers=2, thread_name_prefix="omega-db")
+
+# RSS memory watchdog threshold (bytes). Default 2 GB.
+# Override with OMEGA_RSS_LIMIT_MB env var.
+_RSS_LIMIT_BYTES = int(os.environ.get("OMEGA_RSS_LIMIT_MB", "2048")) * 1024 * 1024
+
 # Idle watchdog: exit after this many seconds without a tool call.
 # Override with OMEGA_IDLE_TIMEOUT env var. 0 = disabled.
 _IDLE_TIMEOUT = int(os.environ.get("OMEGA_IDLE_TIMEOUT", "3600"))
@@ -130,7 +143,7 @@ _write_timestamps: collections.deque = collections.deque()
 
 _WRITE_TOOLS = frozenset({
     "omega_store", "omega_checkpoint", "omega_remind",
-    "omega_memory", "omega_maintain",
+    "omega_memory", "omega_maintain", "omega_reflect",
     "omega_profile_set", "omega_entity_create", "omega_entity_update",
     "omega_ingest_document", "omega_task_create",
     "omega_file_claim", "omega_branch_claim",
@@ -148,6 +161,7 @@ def _check_rate_limit(tool_name: str) -> str | None:
         _global_timestamps.popleft()
 
     if len(_global_timestamps) >= _GLOBAL_RATE_LIMIT:
+        logger.warning("Global rate limit exceeded (%d calls/min)", _GLOBAL_RATE_LIMIT)
         return f"Rate limit exceeded: {_GLOBAL_RATE_LIMIT} calls/min globally. Try again shortly."
 
     _global_timestamps.append(now)
@@ -157,6 +171,7 @@ def _check_rate_limit(tool_name: str) -> str | None:
         while _write_timestamps and _write_timestamps[0] < cutoff:
             _write_timestamps.popleft()
         if len(_write_timestamps) >= _WRITE_RATE_LIMIT:
+            logger.warning("Write rate limit exceeded (%d calls/min) for tool=%s", _WRITE_RATE_LIMIT, tool_name)
             return f"Rate limit exceeded: {_WRITE_RATE_LIMIT} write calls/min. Try again shortly."
         _write_timestamps.append(now)
 
@@ -198,7 +213,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         text = content_list[0].get("text", str(result)) if content_list else str(result)
         return [TextContent(type="text", text=text)]
     except Exception as e:
-        logger.error("Tool %s failed: %s", name, e)
+        logger.error("Tool %s failed: %s", name, e, exc_info=True)
         return [TextContent(type="text", text=f"Error in {name}: {e}")]
 
 
@@ -214,14 +229,34 @@ async def _idle_watchdog():
 
 
 async def _socket_watchdog():
-    """Re-create the hook socket if it gets deleted by another process."""
+    """Re-create the hook socket if deleted or stale (unresponsive)."""
+    if sys.platform == "win32":
+        return  # TCP server doesn't need file watchdog
+
     from omega.server.hook_server import SOCK_PATH, start_hook_server
 
     while True:
         await asyncio.sleep(15)
+        if not SOCK_PATH:
+            continue
         if not SOCK_PATH.exists():
             logger.warning("Hook socket deleted, re-creating...")
             await start_hook_server()
+        else:
+            # Validate socket is actually ours and responsive
+            try:
+                r, w = await asyncio.wait_for(
+                    asyncio.open_unix_connection(path=str(SOCK_PATH)), timeout=2.0
+                )
+                w.close()
+                await w.wait_closed()
+            except (OSError, asyncio.TimeoutError):
+                logger.warning("Hook socket unresponsive, re-creating...")
+                try:
+                    SOCK_PATH.unlink()
+                except OSError:
+                    pass
+                await start_hook_server()
 
 
 _coord_tick_count = 0
@@ -281,15 +316,134 @@ async def _coordination_loop():
     while True:
         await asyncio.sleep(60)
         try:
-            await loop.run_in_executor(None, _run_coordination_tick)
+            await loop.run_in_executor(_SQLITE_EXECUTOR, _run_coordination_tick)
         except Exception:
             pass  # All fail-open
 
 
+def _configure_logging():
+    """Set up logging with both stderr and rotating file handler."""
+    from logging.handlers import RotatingFileHandler
+    from pathlib import Path
+
+    log_dir = Path.home() / ".omega" / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+    log_file = log_dir / "omega.log"
+
+    # Root logger: WARNING to stderr (default for MCP)
+    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+
+    # File handler: captures WARNING+ with rotation (5MB, 3 backups)
+    file_handler = RotatingFileHandler(
+        str(log_file), maxBytes=5 * 1024 * 1024, backupCount=3,
+    )
+    file_handler.setLevel(logging.WARNING)
+    file_handler.setFormatter(logging.Formatter(
+        "%(asctime)s %(levelname)s %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    logging.getLogger().addHandler(file_handler)
+
+
+# --- Mach task_info objects (hoisted to module level to avoid per-call leaks) ---
+_mach_libc = None
+_mach_task_port = None
+_MACH_TASK_BASIC_INFO = 20
+
+if sys.platform == "darwin":
+    try:
+        import ctypes
+        import ctypes.util
+
+        _mach_libc = ctypes.CDLL(ctypes.util.find_library("c"))
+        _mach_task_port = _mach_libc.mach_task_self()
+
+        class _TaskBasicInfo(ctypes.Structure):
+            _fields_ = [
+                ("virtual_size", ctypes.c_uint64),
+                ("resident_size", ctypes.c_uint64),
+                ("resident_size_max", ctypes.c_uint64),
+                ("user_time_seconds", ctypes.c_int32),
+                ("user_time_microseconds", ctypes.c_int32),
+                ("system_time_seconds", ctypes.c_int32),
+                ("system_time_microseconds", ctypes.c_int32),
+                ("policy", ctypes.c_int32),
+                ("suspend_count", ctypes.c_int32),
+            ]
+
+        _mach_info_size_words = ctypes.sizeof(_TaskBasicInfo()) // 4
+    except Exception:
+        _mach_libc = None
+
+
+def _get_current_rss_bytes() -> int:
+    """Get current RSS in bytes using the most accurate OS-specific method.
+
+    On macOS, resource.getrusage ru_maxrss returns *peak* RSS, not current.
+    This function uses Mach task_info for accurate current RSS on macOS,
+    falling back to ru_maxrss if the Mach call fails.
+    """
+    if sys.platform == "darwin" and _mach_libc is not None:
+        try:
+            info = _TaskBasicInfo()
+            count = ctypes.c_uint32(_mach_info_size_words)
+            ret = _mach_libc.task_info(
+                _mach_task_port, _MACH_TASK_BASIC_INFO,
+                ctypes.byref(info), ctypes.byref(count),
+            )
+            if ret == 0:  # KERN_SUCCESS
+                return info.resident_size
+        except Exception:
+            pass
+
+    # Fallback: getrusage (peak RSS, not current — but better than nothing)
+    import resource
+    rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform != "darwin":
+        rss *= 1024  # KB to bytes on Linux
+    return rss
+
+
+async def _rss_watchdog():
+    """Periodically check RSS and gracefully exit if it exceeds the limit.
+
+    Prevents runaway memory growth from crashing the terminal. The MCP
+    client (Claude Code) will automatically restart the server on next
+    tool call.
+    """
+    while True:
+        await asyncio.sleep(30)
+        try:
+            rss = _get_current_rss_bytes()
+
+            if rss > _RSS_LIMIT_BYTES:
+                msg = (
+                    "RSS %.0f MB exceeds limit %.0f MB, shutting down to prevent crash."
+                    % (rss / 1024**2, _RSS_LIMIT_BYTES / 1024**2)
+                )
+                sys.stderr.write(f"WARNING omega.server: {msg}\n")
+                sys.stderr.flush()
+                logger.warning(msg)
+                for handler in logging.getLogger().handlers:
+                    try:
+                        handler.flush()
+                    except Exception:
+                        pass
+                _close_on_exit()
+                os._exit(0)
+        except Exception as e:
+            logger.debug("RSS watchdog check failed: %s", e)
+
+
 async def main():
     """Entry point for the OMEGA MCP server."""
-    logging.basicConfig(level=logging.WARNING, stream=sys.stderr)
+    _configure_logging()
     logger.info("Starting OMEGA MCP server...")
+
+    # Cap asyncio's default executor — prevents unbounded thread growth from
+    # run_in_executor(None, ...) calls (was reaching 49-64 threads at crash).
+    loop = asyncio.get_running_loop()
+    loop.set_default_executor(_SQLITE_EXECUTOR)
 
     # Start UDS hook server for fast hook dispatch
     from omega.server.hook_server import start_hook_server, stop_hook_server
@@ -300,7 +454,7 @@ async def main():
     # behind session startup rather than blocking the first user query.
     async def _prewarm():
         try:
-            from omega.graphs import preload_embedding_model_async
+            from omega.embedding import preload_embedding_model_async
             await preload_embedding_model_async()
         except Exception:
             pass  # Non-fatal — lazy-load on first query as fallback
@@ -320,6 +474,9 @@ async def main():
 
     # Background coordination loop — stale cleanup + deadlock detection even during idle
     _coord_loop_task = asyncio.create_task(_coordination_loop())
+
+    # RSS memory watchdog — graceful exit before memory pressure causes SIGSEGV
+    _rss_watchdog_task = asyncio.create_task(_rss_watchdog())
 
     try:
         async with stdio_server() as (read_stream, write_stream):

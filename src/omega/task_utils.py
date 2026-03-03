@@ -1,7 +1,8 @@
 """Shared task text utilities for hooks and status bar."""
 import logging
-import os
 import re
+
+from omega.llm import llm_complete
 
 logger = logging.getLogger(__name__)
 
@@ -106,28 +107,20 @@ def summarize_task_text(prompt: str) -> str:
     if len(full_text) <= 30:
         return clean_task_text(prompt)
 
-    api_key = os.environ.get("ANTHROPIC_API_KEY", "")
-    if not api_key:
-        return clean_task_text(prompt)
-
     try:
-        import anthropic
-
-        client = anthropic.Anthropic(api_key=api_key, timeout=2.0)
-        response = client.messages.create(
-            model="claude-haiku-4-5-20251001",
-            max_tokens=30,
-            cache_control={"type": "ephemeral"},
-            messages=[{"role": "user", "content": full_text[:500]}],
-            system=(
+        summary = llm_complete(
+            full_text[:500],
+            (
                 "Summarize this developer task/question into a concise 3-8 word "
                 "status bar title. Output ONLY the title, no quotes, no punctuation, "
                 "lowercase. Focus on the ACTION and TARGET, not filler words. "
                 "Examples: 'fix auth token refresh bug', 'add dark mode toggle', "
                 "'refactor statusline task display', 'debug failing CI pipeline'."
             ),
+            max_tokens=30,
+            timeout=2.0,
         )
-        summary = response.content[0].text.strip().rstrip(".")
+        summary = summary.strip().rstrip(".")
         if 5 <= len(summary) <= 60:
             return summary
         return clean_task_text(prompt)

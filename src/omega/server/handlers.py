@@ -6,6 +6,7 @@ MCP-compatible response dicts.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import Any, Dict
 
@@ -45,6 +46,28 @@ def mcp_error(text: str) -> dict:
 # ============================================================================
 
 
+def _get_store():
+    """Get the memory store instance."""
+    from omega.store import MemoryStore
+    return MemoryStore()
+
+
+def _validate_memory_write(event_type: str, metadata: dict) -> str | None:
+    """Validate event_type and metadata before storing. Returns error message or None."""
+    valid_types = {
+        "memory", "session_summary", "task_completion", "error_pattern",
+        "lesson_learned", "decision", "blocked_context", "user_preference",
+        "user_fact", "advisor_insight", "constraint", "behavioral_pattern",
+        "skill_template", "project_context", "project_status",
+        "git_commit", "git_merge", "git_conflict",
+        "session_start", "session_end", "context_warning",
+        "coordination_snapshot", "checkpoint", "reminder",
+    }
+    if event_type and event_type not in valid_types:
+        return f"Unknown event_type '{event_type}'. Valid: {', '.join(sorted(valid_types))}"
+    return None
+
+
 async def handle_omega_store(arguments: dict) -> dict:
     """Store a memory with optional type and metadata.
 
@@ -60,8 +83,13 @@ async def handle_omega_store(arguments: dict) -> dict:
 
     event_type = arguments.get("event_type", "memory")
     metadata = arguments.get("metadata", {})
+
+    err = _validate_memory_write(event_type, metadata)
+    if err:
+        return {"content": [{"type": "text", "text": f"Validation error: {err}"}]}
+
     session_id = arguments.get("session_id")
-    project = arguments.get("project") or (metadata or {}).get("project")
+    project = arguments.get("project") or (metadata or {}).get("project") or os.getcwd()
     entity_id = arguments.get("entity_id")
     agent_type = arguments.get("agent_type")
 
@@ -104,6 +132,10 @@ async def handle_omega_store(arguments: dict) -> dict:
 async def handle_omega_query(arguments: dict) -> dict:
     """Search memories — semantic, phrase, or timeline mode."""
     mode = arguments.get("mode", "semantic")
+
+    # Browse mode — delegate to browse handler
+    if mode == "browse":
+        return await handle_omega_browse(arguments)
 
     # Timeline mode — delegate to timeline handler
     if mode == "timeline":
@@ -526,7 +558,7 @@ async def handle_omega_clear_session(arguments: dict) -> dict:
 
 async def handle_omega_consolidate(arguments: dict) -> dict:
     """Run memory consolidation: prune stale entries, cap summaries, clean edges."""
-    prune_days = _clamp_int(arguments.get("prune_days", 30), default=30, max_val=365)
+    prune_days = _clamp_int(arguments.get("prune_days", 14), default=14, max_val=365)
     max_summaries = _clamp_int(arguments.get("max_summaries", 50), default=50, max_val=1000)
 
     try:
@@ -595,15 +627,19 @@ async def handle_omega_traverse(arguments: dict) -> dict:
 
     max_hops = arguments.get("max_hops", 2)
     min_weight = arguments.get("min_weight", 0.0)
+    edge_types = arguments.get("edge_types")
 
     try:
         from omega.bridge import traverse
 
-        result = traverse(
+        kwargs = dict(
             memory_id=memory_id,
             max_hops=max_hops,
             min_weight=min_weight,
         )
+        if edge_types:
+            kwargs["edge_types"] = edge_types
+        result = traverse(**kwargs)
         return mcp_response(result)
     except Exception as e:
         logger.error("omega_traverse failed: %s", e, exc_info=True)
@@ -1044,8 +1080,46 @@ async def handle_omega_memory(arguments: dict) -> dict:
         return await handle_omega_similar(arguments)
     elif action == "traverse":
         return await handle_omega_traverse(arguments)
+    elif action == "link":
+        memory_id = arguments.get("memory_id", "").strip()
+        target_id = arguments.get("target_id")
+        if not memory_id:
+            return mcp_error("memory_id is required")
+        if not target_id:
+            return mcp_error("target_id required for link action.")
+        edge_type = arguments.get("edge_type", "related")
+        weight = arguments.get("weight", 1.0)
+        store = _get_store()
+        store.add_edge(memory_id, target_id, edge_type, weight=weight)
+        return mcp_response(f"Linked {memory_id[:8]} → {target_id[:8]} ({edge_type})")
+    elif action == "flagged":
+        store = _get_store()
+        rows = store._conn.execute(
+            "SELECT id, content, json_extract(metadata, '$.feedback_score') as score "
+            "FROM memories WHERE CAST(json_extract(metadata, '$.feedback_score') AS INTEGER) <= -3 "
+            "ORDER BY score ASC LIMIT ?", (arguments.get("limit", 10),)
+        ).fetchall()
+        if not rows:
+            return mcp_response("No flagged memories.")
+        lines = [f"  [{r[0][:8]}] score={r[2]}: {r[1][:80]}" for r in rows]
+        return mcp_response("Flagged memories:\n" + "\n".join(lines))
+    elif action == "supersede":
+        memory_id = arguments.get("memory_id", "").strip()
+        target_id = arguments.get("target_id")
+        if not memory_id:
+            return mcp_error("memory_id is required")
+        if not target_id:
+            return mcp_error("target_id required for supersede action.")
+        reason = arguments.get("reason", "manually superseded")
+        store = _get_store()
+        try:
+            store.mark_superseded(target_id, reason=reason)
+        except AttributeError:
+            store.update_node(target_id, metadata={"superseded": True, "supersede_reason": reason})
+        store.add_edge(memory_id, target_id, "supersedes", weight=1.0)
+        return mcp_response(f"Superseded {target_id[:8]} by {memory_id[:8]}")
     else:
-        return mcp_error(f"Unknown omega_memory action: {action!r}. Use: edit, delete, feedback, similar, traverse")
+        return mcp_error(f"Unknown omega_memory action: {action!r}. Use: edit, delete, feedback, similar, traverse, link, flagged, supersede")
 
 
 async def handle_omega_remind_composite(arguments: dict) -> dict:
@@ -1091,8 +1165,43 @@ async def handle_omega_stats(arguments: dict) -> dict:
         return await handle_omega_weekly_digest(arguments)
     elif action == "access_rate":
         return await handle_omega_access_rate(arguments)
+    elif action == "forgetting_log":
+        try:
+            from omega.bridge import get_forgetting_log
+            log = get_forgetting_log(limit=arguments.get("limit", 50), reason=arguments.get("reason"))
+            return mcp_response(log)
+        except ImportError:
+            return mcp_error("Forgetting log not available in this version.")
+    elif action == "dedup":
+        store = _get_store()
+        try:
+            total = store._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+            deduped = store._conn.execute(
+                "SELECT COUNT(*) FROM memories WHERE json_extract(metadata, '$.dedup_of') IS NOT NULL"
+            ).fetchone()[0]
+            return mcp_response(f"Dedup stats: {deduped}/{total} memories are dedup references.")
+        except Exception as e:
+            return mcp_error(f"Dedup stats failed: {e}")
+    elif action == "milestones":
+        store = _get_store()
+        total = store._conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        milestones = [100, 500, 1000, 2500, 5000, 10000]
+        next_milestone = next((m for m in milestones if m > total), None)
+        text = f"Total memories: {total}"
+        if next_milestone:
+            text += f"\nNext milestone: {next_milestone} ({next_milestone - total} to go)"
+        return mcp_response(text)
+    elif action == "diagnostic":
+        return await handle_omega_maintain({"action": "health"})
+    elif action.startswith("habits_"):
+        try:
+            from omega.behavioral import handle_habits
+            result = handle_habits(action, arguments, _get_store())
+            return mcp_response(result)
+        except ImportError:
+            return mcp_error("Behavioral patterns module not available.")
     else:
-        return mcp_error(f"Unknown omega_stats action: {action!r}. Use: types, sessions, digest, access_rate")
+        return mcp_error(f"Unknown omega_stats action: {action!r}. Use: types, sessions, digest, access_rate, forgetting_log, dedup, milestones, diagnostic, habits_*")
 
 
 async def handle_omega_access_rate(arguments: dict) -> dict:
@@ -1124,6 +1233,136 @@ async def handle_omega_access_rate(arguments: dict) -> dict:
         return mcp_error(f"Access rate query failed: {e}")
 
 
+
+
+# ============================================================================
+# Handler: omega_browse
+# ============================================================================
+
+
+async def handle_omega_browse(args: dict) -> dict:
+    """Browse memories by type, session, or recency."""
+    store = _get_store()
+    browse_by = args.get("browse_by", "recent")
+    limit = args.get("limit", 20)
+
+    if browse_by == "type":
+        rows = store._conn.execute(
+            "SELECT json_extract(metadata, '$.event_type') as t, COUNT(*) as c "
+            "FROM memories GROUP BY t ORDER BY c DESC LIMIT ?", (limit,)
+        ).fetchall()
+        lines = [f"  {t or 'memory'}: {c}" for t, c in rows]
+        return mcp_response("Memory types:\n" + "\n".join(lines))
+    elif browse_by == "session":
+        rows = store._conn.execute(
+            "SELECT json_extract(metadata, '$.session_id') as s, COUNT(*) as c "
+            "FROM memories WHERE s IS NOT NULL GROUP BY s ORDER BY c DESC LIMIT ?", (limit,)
+        ).fetchall()
+        lines = [f"  {s[:12]}...: {c}" for s, c in rows if s]
+        return mcp_response("Sessions:\n" + "\n".join(lines))
+    else:  # recent
+        rows = store._conn.execute(
+            "SELECT id, content, created_at FROM memories ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        lines = [f"  [{r[0][:8]}] {r[1][:80]}" for r in rows]
+        return mcp_response("Recent memories:\n" + "\n".join(lines))
+
+
+# ============================================================================
+# Handler: omega_reflect
+# ============================================================================
+
+
+async def handle_omega_reflect(args: dict) -> dict:
+    """Analyze memory quality: contradictions, evolution, stale."""
+    action = args.get("action", "stale")
+
+    try:
+        from omega.reflect import find_contradictions, trace_evolution, find_stale
+    except ImportError:
+        return mcp_error("Reflect module not available. Install omega-memory to use.")
+
+    store = _get_store()
+
+    if action == "contradictions":
+        topic = args.get("topic", "")
+        if not topic:
+            return mcp_error("Topic required for contradiction analysis.")
+        result = find_contradictions(store, topic, limit=args.get("limit", 20))
+        return mcp_response(result)
+    elif action == "evolution":
+        topic = args.get("topic", "")
+        if not topic:
+            return mcp_error("Topic required for evolution analysis.")
+        result = trace_evolution(store, topic, limit=args.get("limit", 20))
+        return mcp_response(result)
+    elif action == "stale":
+        result = find_stale(store, days=args.get("days", 30), min_age_days=args.get("min_age_days", 14), limit=args.get("limit", 30))
+        return mcp_response(result)
+    else:
+        return mcp_error(f"Unknown reflect action: {action}")
+
+
+# ============================================================================
+# Handler: omega_consult_gpt
+# ============================================================================
+
+
+async def handle_omega_consult_gpt(args: dict) -> dict:
+    """Consult GPT for a second opinion."""
+    try:
+        from omega.llm import gpt_complete
+    except ImportError:
+        return mcp_error("GPT consultation requires OPENAI_API_KEY. Set it and ensure openai package is installed.")
+
+    prompt = args.get("prompt", "")
+    if not prompt:
+        return mcp_error("Prompt is required.")
+
+    try:
+        result = await gpt_complete(
+            prompt=prompt,
+            context=args.get("context"),
+            system=args.get("system"),
+            temperature=args.get("temperature", 0.7),
+            max_tokens=args.get("max_tokens", 4096),
+        )
+        return mcp_response(result)
+    except Exception as e:
+        logger.error("omega_consult_gpt failed: %s", e, exc_info=True)
+        return mcp_error(f"GPT consultation failed: {e}")
+
+
+# ============================================================================
+# Handler: omega_consult_claude
+# ============================================================================
+
+
+async def handle_omega_consult_claude(args: dict) -> dict:
+    """Consult Claude for a second opinion."""
+    try:
+        from omega.llm import claude_complete
+    except ImportError:
+        return mcp_error("Claude consultation requires ANTHROPIC_API_KEY. Set it and ensure anthropic package is installed.")
+
+    prompt = args.get("prompt", "")
+    if not prompt:
+        return mcp_error("Prompt is required.")
+
+    try:
+        result = await claude_complete(
+            prompt=prompt,
+            context=args.get("context"),
+            system=args.get("system"),
+            temperature=args.get("temperature", 0.7),
+            max_tokens=args.get("max_tokens", 4096),
+        )
+        return mcp_response(result)
+    except Exception as e:
+        logger.error("omega_consult_claude failed: %s", e, exc_info=True)
+        return mcp_error(f"Claude consultation failed: {e}")
+
+
 # ============================================================================
 # Handler Registry
 # ============================================================================
@@ -1142,6 +1381,10 @@ HANDLERS: Dict[str, Any] = {
     "omega_remind": handle_omega_remind_composite,
     "omega_maintain": handle_omega_maintain,
     "omega_stats": handle_omega_stats,
+    "omega_reflect": handle_omega_reflect,
+    "omega_consult_gpt": handle_omega_consult_gpt,
+    "omega_consult_claude": handle_omega_consult_claude,
+    "omega_browse": handle_omega_browse,
     # === Backward compatibility aliases (old tool names -> handlers) ===
     "omega_remember": lambda args: handle_omega_store(
         {**args, "event_type": args.get("event_type", "user_preference")}
