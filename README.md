@@ -2,6 +2,8 @@
 
 **Persistent memory for AI coding agents.** Your agent remembers decisions, learns from mistakes, and picks up where it left off.
 
+[🇨🇳 中文](translations/README_zh-CN.md) | [🇯🇵 日本語](translations/README_ja.md) | [🇰🇷 한국어](translations/README_ko.md) | [🇧🇷 Português](translations/README_pt-BR.md) | [🇪🇸 Español](translations/README_es.md) | [🇫🇷 Français](translations/README_fr.md) | [🇩🇪 Deutsch](translations/README_de.md) | [🇷🇺 Русский](translations/README_ru.md)
+
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
@@ -50,13 +52,45 @@ omega doctor                        # verify everything works
 
 That's it. Start a new Claude Code session and say **"Remember that we always use early returns and never nest more than 2 levels."** Close the session. Open a new one and ask **"What are my code style preferences?"** OMEGA recalls it instantly.
 
-**Using Cursor, Windsurf, or Zed?** Install with `pip3 install omega-memory[server]`, then:
+**Using another editor?** Install with `pip3 install omega-memory[server]`, then:
 
 ```bash
 omega setup --client cursor          # writes ~/.cursor/mcp.json
 omega setup --client windsurf        # writes ~/.codeium/windsurf/mcp_config.json
 omega setup --client zed             # writes ~/.config/zed/settings.json
 ```
+
+<details>
+<summary><strong>Manual MCP config (Cline, VS Code, Augment, Codex CLI, any MCP client)</strong></summary>
+
+Add to your editor's MCP config file:
+
+```json
+{
+  "mcpServers": {
+    "omega-memory": {
+      "command": "python3",
+      "args": ["-m", "omega.server.mcp_server"]
+    }
+  }
+}
+```
+
+**Config file locations by editor:**
+
+| Editor | Config File |
+|--------|------------|
+| Claude Code | `~/.claude.json` (under `projects."*".mcpServers`) |
+| Cursor | `~/.cursor/mcp.json` |
+| Windsurf | `~/.codeium/windsurf/mcp_config.json` |
+| Zed | `~/.config/zed/settings.json` (under `context_servers`) |
+| Cline | VS Code settings → Cline MCP Servers |
+| VS Code (Copilot) | `.vscode/mcp.json` in your project |
+| Augment | `~/.augment/mcp.json` |
+| OpenAI Codex CLI | `~/.codex/mcp.json` |
+| Gemini CLI | `~/.gemini/settings.json` |
+
+</details>
 
 <details>
 <summary><strong>Alternative install methods</strong></summary>
