@@ -26,11 +26,11 @@ class TestPackageImport:
 
     def test_import_handlers(self):
         from omega.server.handlers import HANDLERS
-        assert len(HANDLERS) >= 20
+        assert len(HANDLERS) >= 36  # 14 primary + 22 backward-compat aliases
 
     def test_import_tool_schemas(self):
         from omega.server.tool_schemas import TOOL_SCHEMAS
-        assert len(TOOL_SCHEMAS) >= 10  # 12 consolidated tools
+        assert len(TOOL_SCHEMAS) >= 14  # 14 consolidated tools
 
     def test_import_types(self):
         from omega.types import AutoCaptureEventType, TTLCategory

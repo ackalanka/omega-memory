@@ -1095,7 +1095,7 @@ async def handle_omega_memory(arguments: dict) -> dict:
     elif action == "flagged":
         store = _get_store()
         rows = store._conn.execute(
-            "SELECT id, content, json_extract(metadata, '$.feedback_score') as score "
+            "SELECT node_id, content, json_extract(metadata, '$.feedback_score') as score "
             "FROM memories WHERE CAST(json_extract(metadata, '$.feedback_score') AS INTEGER) <= -3 "
             "ORDER BY score ASC LIMIT ?", (arguments.get("limit", 10),)
         ).fetchall()
@@ -1262,7 +1262,7 @@ async def handle_omega_browse(args: dict) -> dict:
         return mcp_response("Sessions:\n" + "\n".join(lines))
     else:  # recent
         rows = store._conn.execute(
-            "SELECT id, content, created_at FROM memories ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT node_id, content, created_at FROM memories ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         lines = [f"  [{r[0][:8]}] {r[1][:80]}" for r in rows]
         return mcp_response("Recent memories:\n" + "\n".join(lines))
@@ -1280,7 +1280,7 @@ async def handle_omega_reflect(args: dict) -> dict:
     try:
         from omega.reflect import find_contradictions, trace_evolution, find_stale
     except ImportError:
-        return mcp_error("Reflect module not available. Install omega-memory to use.")
+        return mcp_error("Reflect module requires OMEGA Pro. Learn more: https://omegamax.co")
 
     store = _get_store()
 

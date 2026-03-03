@@ -1967,7 +1967,12 @@ def cmd_knowledge(args):
         print(result)
 
     elif subcmd == "sync-kb":
-        from omega.knowledge.cloud_sync import sync_kb_queue
+        try:
+            from omega.knowledge.cloud_sync import sync_kb_queue
+        except ImportError:
+            print("Knowledge base sync requires additional modules.")
+            print("Learn more: https://omegamax.co")
+            return
         result = sync_kb_queue(batch_size=args.batch_size)
         print(result)
 
@@ -2000,7 +2005,12 @@ def cmd_cloud(args):
             print("Usage: omega cloud setup --url <SUPABASE_URL> --key <ANON_KEY>")
             print("\nGet these from: Supabase Dashboard → Settings → API")
             return
-        from omega.cloud.setup import setup_supabase
+        try:
+            from omega.cloud.setup import setup_supabase
+        except ImportError:
+            print("Cloud setup requires additional modules.")
+            print("Learn more: https://omegamax.co")
+            return
 
         result = setup_supabase(url, key, service_key)
         print(result)
@@ -2024,12 +2034,22 @@ def cmd_cloud(args):
             print(f"Cloud not configured: {e}")
 
     elif subcmd == "schema":
-        from omega.cloud.setup import get_schema_sql
+        try:
+            from omega.cloud.setup import get_schema_sql
+        except ImportError:
+            print("Cloud schema requires additional modules.")
+            print("Learn more: https://omegamax.co")
+            return
 
         print(get_schema_sql())
 
     elif subcmd == "verify":
-        from omega.cloud.setup import verify_connection
+        try:
+            from omega.cloud.setup import verify_connection
+        except ImportError:
+            print("Cloud verify requires additional modules.")
+            print("Learn more: https://omegamax.co")
+            return
 
         print(verify_connection())
 
@@ -2107,7 +2127,12 @@ def cmd_mobile(args):
 
     elif subcmd == "serve":
         import asyncio
-        from omega.server.http_server import run_http, get_or_create_api_key
+        try:
+            from omega.server.http_server import run_http, get_or_create_api_key
+        except ImportError:
+            print("Mobile serve requires additional modules.")
+            print("Learn more: https://omegamax.co")
+            return
 
         port = args.port
         host = args.host
@@ -2129,7 +2154,12 @@ def cmd_mobile(args):
 
 def cmd_activate(args):
     """Activate a Pro license key."""
-    from omega.license import activate
+    try:
+        from omega.license import activate
+    except ImportError:
+        print("License activation requires OMEGA Pro modules.")
+        print("Learn more: https://omegamax.co")
+        sys.exit(1)
     key = args.key.strip()
 
     if not key.startswith("OMEGA-PRO-"):
@@ -2148,7 +2178,12 @@ def cmd_activate(args):
 
 def cmd_license(args):
     """Show current license status."""
-    from omega.license import license_status, deactivate
+    try:
+        from omega.license import license_status, deactivate
+    except ImportError:
+        print("OMEGA Community Edition — no license required.")
+        print("Upgrade to Pro: https://omegamax.co")
+        return
 
     if getattr(args, "deactivate", False):
         deactivate()

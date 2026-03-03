@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-03-03
+
+### Fixed
+
+- Fixed browse and flagged-memory queries returning integer row IDs instead of string node IDs, causing TypeError crashes when formatting results.
+- Fixed 7 CLI commands crashing with ImportError on community edition when pro-only modules (`omega.knowledge`, `omega.cloud`, `omega.license`, `omega.server.http_server`) are not installed.
+
+### Added
+
+- 91 new tests covering bridge helper functions (`_extract_facts`, `_auto_relate`, `_detect_and_supersede`, `_split_atomic_facts`) and handler actions (`omega_reflect`, `omega_memory`, `omega_stats`, `omega_browse`).
+- Updated integration test assertions to match current tool and handler counts.
+
 ## [0.11.0] - 2026-03-03
 
 ### Added
@@ -251,7 +263,10 @@ OMEGA — persistent memory for AI coding agents. First public release under Apa
 - `omega query/store/remember` — CLI access to memory
 - Plugin architecture via entry points for extensibility
 
-[Unreleased]: https://github.com/omega-memory/omega-memory/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/omega-memory/omega-memory/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/omega-memory/omega-memory/compare/v0.11.0...v0.11.1
+[0.11.0]: https://github.com/omega-memory/omega-memory/compare/v0.10.8...v0.11.0
+[0.10.8]: https://github.com/omega-memory/omega-memory/compare/v0.10.7...v0.10.8
 [0.10.0]: https://github.com/omega-memory/omega-memory/compare/v0.9.0...v0.10.0
 [0.9.0]: https://github.com/omega-memory/omega-memory/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/omega-memory/omega-memory/compare/v0.7.3...v0.8.0
