@@ -506,6 +506,57 @@ async def test_compact_clamps_min_cluster_size():
 
 
 # ============================================================================
+# Handler: omega_protocol
+# ============================================================================
+
+@pytest.mark.asyncio
+async def test_omega_protocol_default():
+    """Default (no args) returns the solo protocol with all community sections."""
+    result = await HANDLERS["omega_protocol"]({})
+    assert not result.get("isError"), result
+    text = result["content"][0]["text"]
+    assert "OMEGA Protocol" in text
+    assert "Memory Usage" in text
+
+@pytest.mark.asyncio
+async def test_omega_protocol_single_section():
+    """Requesting a single section returns only that section."""
+    result = await HANDLERS["omega_protocol"]({"section": "memory"})
+    assert not result.get("isError"), result
+    text = result["content"][0]["text"]
+    assert "Memory Usage" in text
+    # Should NOT contain other sections
+    assert "Git Rules" not in text
+
+@pytest.mark.asyncio
+async def test_omega_protocol_minimal_group():
+    """The 'minimal' group includes memory, context, and git."""
+    result = await HANDLERS["omega_protocol"]({"section": "minimal"})
+    assert not result.get("isError"), result
+    text = result["content"][0]["text"]
+    assert "Memory Usage" in text
+    assert "Context Management" in text
+    assert "Git Rules" in text
+
+@pytest.mark.asyncio
+async def test_omega_protocol_pro_section_graceful():
+    """Requesting a pro-only section returns a polite note, not an error."""
+    result = await HANDLERS["omega_protocol"]({"section": "coordination"})
+    assert not result.get("isError"), result
+    text = result["content"][0]["text"]
+    assert "Pro" in text
+
+@pytest.mark.asyncio
+async def test_omega_protocol_invalid_section():
+    """Unknown section name falls back to the solo protocol, no error."""
+    result = await HANDLERS["omega_protocol"]({"section": "nonexistent_section_xyz"})
+    assert not result.get("isError"), result
+    text = result["content"][0]["text"]
+    assert "OMEGA Protocol" in text
+    assert "Memory Usage" in text
+
+
+# ============================================================================
 # Schema / docstring accuracy
 # ============================================================================
 

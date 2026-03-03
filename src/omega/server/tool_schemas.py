@@ -77,7 +77,7 @@ TOOL_SCHEMAS = [
         "inputSchema": {
             "type": "object",
             "properties": {
-                "section": {"type": "string", "description": "Section: 'memory', 'coordination', 'coordination_gate', 'teamwork', 'context', 'reminders', 'diagnostics', 'entity', 'heuristics', 'git', 'what_next'. Groups: 'solo', 'multi_agent', 'full', 'minimal'."},
+                "section": {"type": "string", "description": "Section: 'memory', 'context', 'git', 'heuristics', 'verification', 'efficiency', 'source_verification', 'reminders'. Groups: 'solo', 'full', 'minimal'."},
                 "project": {"type": "string", "description": "Project path for context-sensitive rules."},
             },
         },
