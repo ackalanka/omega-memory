@@ -18,11 +18,11 @@ class EmbeddingError(OmegaError):
 
 
 class CoordinationError(OmegaError):
-    """Raised when multi-agent coordination operations fail (Pro only)."""
+    """Raised when multi-agent coordination operations fail."""
 
 
 class CloudSyncError(OmegaError):
-    """Raised when cloud sync operations fail (Pro only)."""
+    """Raised when cloud sync operations fail."""
 
 
 class HookError(OmegaError):

@@ -108,6 +108,16 @@ def _reset_bridge(tmp_omega_dir):
 
 
 @pytest.fixture
+def oracle_engine(_reset_bridge):
+    """Create a fresh OracleEngine backed by a temp store."""
+    import omega.oracle.engine as oe
+    oe._engine_instance = None
+    engine = oe.get_oracle_engine()
+    yield engine
+    oe._engine_instance = None
+
+
+@pytest.fixture
 def store(tmp_omega_dir):
     """Create a fresh SQLiteStore for testing."""
     from omega.sqlite_store import SQLiteStore

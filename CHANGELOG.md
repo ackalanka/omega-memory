@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-03-04
+
+### Added
+- **Hooks in wheel**: Claude Code hooks now ship inside the pip package; previously
+  pip-installed users got broken hook errors because fast_hook.py was excluded
+- **`omega hooks` CLI**: New subcommand with three modes:
+  - `omega hooks setup` — auto-configures ~/.claude/settings.json with correct paths
+  - `omega hooks path` — prints the hooks directory (machine-readable)
+  - `omega hooks doctor` — diagnoses broken paths in hook config
+- Shared `_resolve_hooks_src()` helper for consistent hook path resolution
+
+### Changed
+- `omega setup` now uses `_resolve_hooks_src()` instead of inline path logic
+
+### Fixed
+- Hooks excluded from wheel due to missing `__init__.py` in `src/omega/hooks/`
+
 ## [0.11.1] - 2026-03-03
 
 ### Fixed

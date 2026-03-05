@@ -315,11 +315,6 @@ def test_checkpoint_dedup_threshold():
 @pytest.mark.asyncio
 async def test_session_resume_surfaces_checkpoint():
     """_session_resume should include [CHECKPOINT] when checkpoints exist."""
-    try:
-        from omega.server.hook_server import _session_resume
-    except ImportError:
-        pytest.skip("_session_resume not available in community edition")
-
     # Store a checkpoint first
     await HANDLERS["omega_checkpoint"](
         {
@@ -329,6 +324,9 @@ async def test_session_resume_surfaces_checkpoint():
             "project": "/test/project",
         }
     )
+
+    # Call _session_resume
+    from omega.server.hook_server import _session_resume
 
     class FakeMgr:
         def recover_session(self, project):

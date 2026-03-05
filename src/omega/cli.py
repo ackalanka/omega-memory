@@ -601,6 +601,110 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
         print(f"  WARNING: Failed to update CLAUDE.md: {e}")
 
 
+def _resolve_hooks_src() -> Path:
+    """Resolve the hooks source directory.
+
+    Priority:
+    1. src/omega/hooks/ inside the installed package (pip install)
+    2. hooks/ at repo root (development checkout)
+    """
+    pkg_hooks = Path(__file__).parent / "hooks"
+    if pkg_hooks.exists() and (pkg_hooks / "fast_hook.py").exists():
+        return pkg_hooks
+    repo_hooks = Path(__file__).parent.parent.parent / "hooks"
+    if repo_hooks.exists() and (repo_hooks / "fast_hook.py").exists():
+        return repo_hooks
+    return pkg_hooks  # will fail gracefully downstream
+
+
+def cmd_hooks(args):
+    """Manage Claude Code hooks: setup, path, doctor."""
+    sub = getattr(args, "hooks_command", None)
+
+    hooks_src = _resolve_hooks_src()
+    python_path = _resolve_python_path()
+
+    if sub == "setup":
+        print("OMEGA hooks setup")
+        print(f"  Python:  {python_path}")
+        print(f"  Hooks:   {hooks_src}")
+
+        if not (hooks_src / "fast_hook.py").exists():
+            print("\n  ERROR: fast_hook.py not found at expected location.")
+            print("  Try reinstalling: pip install omega-memory[server]")
+            sys.exit(1)
+
+        try:
+            _inject_settings_hooks(hooks_src)
+            print("\n  Hooks configured in ~/.claude/settings.json")
+        except Exception as e:
+            print(f"\n  ERROR: Failed to configure hooks: {e}")
+            sys.exit(1)
+
+        try:
+            _inject_claude_md()
+        except Exception as e:
+            print(f"  WARNING: Failed to update CLAUDE.md: {e}")
+
+        print("\n  Done! Restart Claude Code for changes to take effect.")
+
+    elif sub == "path":
+        print(hooks_src)
+
+    elif sub == "doctor":
+        print("OMEGA hooks doctor")
+        print(f"  Python:     {python_path}")
+        print(f"  Hooks dir:  {hooks_src}")
+
+        fh = hooks_src / "fast_hook.py"
+        if fh.exists():
+            print(f"  fast_hook:  OK ({fh})")
+        else:
+            print(f"  fast_hook:  MISSING ({fh})")
+
+        if SETTINGS_JSON_PATH.exists():
+            try:
+                settings = json.loads(SETTINGS_JSON_PATH.read_text())
+                hooks = settings.get("hooks", {})
+                events_with_omega = 0
+                broken_paths = []
+                for event, entries in hooks.items():
+                    for entry in entries:
+                        for h in entry.get("hooks", []):
+                            cmd = h.get("command", "")
+                            if "omega" in cmd.lower() or "fast_hook" in cmd:
+                                events_with_omega += 1
+                                parts = cmd.split()
+                                if len(parts) >= 2:
+                                    py_path = parts[0]
+                                    script_path = parts[1]
+                                    if not Path(py_path).exists():
+                                        broken_paths.append(f"{event}: Python not found: {py_path}")
+                                    if not Path(script_path).exists():
+                                        broken_paths.append(f"{event}: Script not found: {script_path}")
+
+                print(f"  settings:   {events_with_omega} OMEGA hook events configured")
+                if broken_paths:
+                    print(f"  BROKEN:     {len(broken_paths)} path issue(s)")
+                    for bp in broken_paths:
+                        print(f"    - {bp}")
+                    print("\n  Fix with: omega hooks setup")
+                else:
+                    print("  paths:      All OK")
+            except json.JSONDecodeError:
+                print("  settings:   MALFORMED (~/.claude/settings.json)")
+        else:
+            print("  settings:   NOT FOUND (~/.claude/settings.json)")
+            print("\n  Fix with: omega hooks setup")
+
+    else:
+        print("Usage: omega hooks {setup|path|doctor}")
+        print()
+        print("  setup   Configure hooks in ~/.claude/settings.json")
+        print("  path    Print the hooks directory path")
+        print("  doctor  Check hook configuration health")
+
+
 def _mcp_server_config() -> dict:
     """Return the MCP server JSON block for omega-memory."""
     python_path = _resolve_python_path()
@@ -809,11 +913,7 @@ def cmd_setup(args):
     steps_done.append("Config file")
 
     # 5. Client-specific setup
-    # Hooks are bundled inside the package at src/omega/hooks/
-    # Fallback to repo root hooks/ for development installs
-    hooks_src = Path(__file__).parent / "hooks"
-    if not hooks_src.exists():
-        hooks_src = Path(__file__).parent.parent.parent / "hooks"
+    hooks_src = _resolve_hooks_src()
     if client == "claude-code":
         _setup_claude_code(errors, hooks_src, hooks_only=hooks_only)
         if hooks_only:
@@ -2313,6 +2413,13 @@ def main():
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     serve_parser.add_argument("--no-auth", action="store_true", help="Disable API key authentication")
 
+    # --- Hooks commands ---
+    hooks_parser = subparsers.add_parser("hooks", help="Manage Claude Code hooks")
+    hooks_sub = hooks_parser.add_subparsers(dest="hooks_command", help="Hook subcommands")
+    hooks_sub.add_parser("setup", help="Configure hooks in ~/.claude/settings.json")
+    hooks_sub.add_parser("path", help="Print the hooks directory path")
+    hooks_sub.add_parser("doctor", help="Check hook configuration health")
+
     # --- Reminder commands (experimental) ---
     remind_parser = subparsers.add_parser("remind", help="Manage time-based reminders (experimental)")
     remind_sub = remind_parser.add_subparsers(dest="remind_command", help="Reminder subcommands")
@@ -2399,6 +2506,7 @@ def main():
         "logs": cmd_logs,
         "validate": cmd_validate,
         "serve": cmd_serve,
+        "hooks": cmd_hooks,
         "remind": cmd_remind,
         "knowledge": cmd_knowledge,
         "kb": cmd_knowledge,
