@@ -23,6 +23,7 @@ import atexit
 import logging
 import os
 import re
+import time as _time
 import threading
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -154,6 +155,7 @@ def reset_memory():
         except Exception as e:
             logger.debug("Store close failed during reset: %s", e)
     _store_instance = None
+    _welcome_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -1500,6 +1502,13 @@ def query_structured(
 
 
 # ---------------------------------------------------------------------------
+# Welcome cache -- avoids redundant DB queries across rapid session starts
+# ---------------------------------------------------------------------------
+_welcome_cache: Dict[str, tuple] = {}  # key -> (monotonic_time, result)
+_WELCOME_CACHE_TTL = 30  # seconds
+
+
+# ---------------------------------------------------------------------------
 # Public API -- Welcome / Session Bootstrap
 # ---------------------------------------------------------------------------
 
@@ -1510,6 +1519,13 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
     Returns observation_prefix (grouped by type) and project_context
     for Claude to reference throughout the session.
     """
+    # Fast-path: return cached result if recent enough
+    cache_key = f"{session_id or ''}:{project or ''}"
+    now_mono = _time.monotonic()
+    cached = _welcome_cache.get(cache_key)
+    if cached and (now_mono - cached[0]) < _WELCOME_CACHE_TTL:
+        return cached[1]
+
     db = _get_store()
 
     # Get recent high-value memories (decisions, lessons, preferences, errors)
@@ -1541,7 +1557,6 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
             except Exception:
                 pass
         recent_ids = {n.id for n in recent}
-        now_iso = datetime.now(timezone.utc).isoformat()
         for _type in ("user_preference", "user_fact"):
             type_nodes = db.get_by_type(_type, limit=5, entity_id=_entity_id)
             for node in type_nodes:
@@ -1550,15 +1565,6 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
                 if node.id not in recent_ids:
                     recent.append(node)
                     recent_ids.add(node.id)
-                # Bump access_count for all surfaced nodes (whether new or already in recent)
-                try:
-                    db._conn.execute(
-                        "UPDATE memories SET access_count = access_count + 1, last_accessed = ? WHERE node_id = ?",
-                        (now_iso, node.id),
-                    )
-                except Exception:
-                    pass
-        db._commit()
     except Exception as e:
         logger.debug("Welcome type-based enrichment failed: %s", e)
 
@@ -1606,35 +1612,25 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
     except Exception as e:
         logger.debug("Welcome observation_prefix failed: %s", e)
 
-    # Build project_context
+    # Build project_context (lightweight — no embedding search)
     project_context = ""
     if project:
         try:
-            from omega.sqlite_store import SurfacingContext
-            project_memories = db.query(
-                Path(project).name,
-                limit=5,
-                project_path=project,
-                scope="project",
-                surfacing_context=SurfacingContext.SESSION_START,
-            )
-            if project_memories:
+            proj_nodes = [
+                n for n in recent
+                if (n.metadata or {}).get("project") == project
+            ]
+            if proj_nodes:
                 items = []
-                for m in project_memories[:5]:
+                for m in proj_nodes[:5]:
                     text = (m.metadata or {}).get("observation") or m.content[:120]
                     items.append(f"- {text}")
                 project_context = f"### Project: {Path(project).name}\n" + "\n".join(items)
         except Exception as e:
             logger.debug("Welcome project_context failed: %s", e)
 
-    # Predictive prefetch (#5)
-    if project:
-        try:
-            prefetched = db.prefetch_for_project(project)
-            if prefetched:
-                logger.debug("Prefetched %d memories for project %s", prefetched, project)
-        except Exception as e:
-            logger.debug("Welcome prefetch failed: %s", e)
+    # NOTE: Predictive prefetch removed — caused write contention with
+    # deferred startup thread. Access counts updated on actual queries.
 
     profile = get_profile()
     node_count = db.node_count()
@@ -1667,6 +1663,8 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
     }
     if warnings:
         result["warnings"] = warnings
+
+    _welcome_cache[cache_key] = (now_mono, result)
     return result
 
 
