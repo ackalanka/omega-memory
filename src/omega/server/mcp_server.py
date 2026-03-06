@@ -94,9 +94,14 @@ _RSS_LIMIT_BYTES = int(os.environ.get("OMEGA_RSS_LIMIT_MB", "2048")) * 1024 * 10
 _IDLE_TIMEOUT = int(os.environ.get("OMEGA_IDLE_TIMEOUT", "3600"))
 _last_activity: float = time.monotonic()
 
+# Shutdown flag — set True during graceful shutdown to reject new tool calls
+_shutting_down: bool = False
+
 
 def _close_on_exit():
     """Close SQLite store when the MCP server process exits."""
+    global _shutting_down
+    _shutting_down = True
     try:
         from omega.bridge import _close_store
 
@@ -197,6 +202,10 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     global _last_activity
     _last_activity = time.monotonic()
 
+    # Reject new tool calls during shutdown
+    if _shutting_down:
+        return [TextContent(type="text", text="Server is shutting down, please retry.")]
+
     # Rate limiting
     rate_err = _check_rate_limit(name)
     if rate_err:
@@ -211,6 +220,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
         # Extract text from MCP response format
         content_list = result.get("content", [{}])
         text = content_list[0].get("text", str(result)) if content_list else str(result)
+
+        # Release freed native memory after each tool call to prevent
+        # MALLOC_LARGE_REUSABLE accumulation (macOS holds freed pages)
+        _force_malloc_release()
+
         return [TextContent(type="text", text=text)]
     except Exception as e:
         logger.error("Tool %s failed: %s", name, e, exc_info=True)
@@ -372,8 +386,29 @@ if sys.platform == "darwin":
             ]
 
         _mach_info_size_words = ctypes.sizeof(_TaskBasicInfo()) // 4
+
+        # malloc_zone_pressure_relief — forces macOS malloc to return
+        # MALLOC_LARGE_REUSABLE pages to the kernel. Without this, freed
+        # large allocations (ONNX tensors, JSON parsing) stay resident as
+        # "reusable" pages, inflating RSS.
+        _malloc_lib = ctypes.CDLL(ctypes.util.find_library("System"))
+        _malloc_lib.malloc_zone_pressure_relief.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
+        _malloc_lib.malloc_zone_pressure_relief.restype = ctypes.c_size_t
+
+        def _force_malloc_release() -> int:
+            """Release freed malloc pages back to OS. Returns bytes released."""
+            try:
+                return _malloc_lib.malloc_zone_pressure_relief(None, 0)
+            except Exception:
+                return 0
     except Exception:
         _mach_libc = None
+
+        def _force_malloc_release() -> int:
+            return 0
+else:
+    def _force_malloc_release() -> int:
+        return 0
 
 
 def _get_current_rss_bytes() -> int:
@@ -411,12 +446,31 @@ async def _rss_watchdog():
     client (Claude Code) will automatically restart the server on next
     tool call.
     """
+    import gc
+
     while True:
-        await asyncio.sleep(30)
+        await asyncio.sleep(15)
         try:
             rss = _get_current_rss_bytes()
 
+            # Proactive memory release when RSS exceeds 50% of limit.
+            # macOS malloc holds freed large allocations as MALLOC_LARGE_REUSABLE
+            # pages. malloc_zone_pressure_relief forces release.
+            if rss > _RSS_LIMIT_BYTES * 0.5:
+                gc.collect()
+                released = _force_malloc_release()
+                rss_after = _get_current_rss_bytes()
+                logger.warning(
+                    "Memory pressure relief: RSS %.1f MB -> %.1f MB "
+                    "(malloc released %d bytes, limit %.0f MB)",
+                    rss / 1024**2, rss_after / 1024**2,
+                    released, _RSS_LIMIT_BYTES / 1024**2,
+                )
+                rss = rss_after
+
             if rss > _RSS_LIMIT_BYTES:
+                global _shutting_down
+                _shutting_down = True
                 msg = (
                     "RSS %.0f MB exceeds limit %.0f MB, shutting down to prevent crash."
                     % (rss / 1024**2, _RSS_LIMIT_BYTES / 1024**2)
@@ -439,6 +493,19 @@ async def main():
     """Entry point for the OMEGA MCP server."""
     _configure_logging()
     logger.info("Starting OMEGA MCP server...")
+
+    # --- Startup memory baseline ---
+    _startup_rss = _get_current_rss_bytes()
+    logger.warning(
+        "Startup RSS: %.1f MB, PID: %d",
+        _startup_rss / 1024**2, os.getpid(),
+    )
+
+    # Optional tracemalloc for memory leak diagnosis (enable via env var)
+    if os.environ.get("OMEGA_TRACEMALLOC"):
+        import tracemalloc
+        tracemalloc.start(10)
+        logger.warning("tracemalloc enabled for memory leak diagnosis")
 
     # Cap asyncio's default executor — prevents unbounded thread growth from
     # run_in_executor(None, ...) calls (was reaching 49-64 threads at crash).
