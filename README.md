@@ -19,12 +19,7 @@ omega setup
 
 Works with **Claude Code** | **Cursor** | **Windsurf** | **Zed** | any MCP client
 
-<!-- TODO: demo GIF — record a ~30s terminal session showing:
-     1. "Remember we use early returns" in session A
-     2. Close session A, open session B
-     3. "What are my code style preferences?" → OMEGA recalls it
-     Place the GIF in assets/demo.gif and uncomment the line below. -->
-<!-- ![OMEGA demo — without memory vs. with OMEGA](https://raw.githubusercontent.com/omega-memory/omega-memory/main/assets/demo.gif) -->
+![OMEGA demo — without memory vs. with OMEGA](https://raw.githubusercontent.com/omega-memory/omega-memory/main/assets/demo.gif)
 
 ---
 
@@ -277,6 +272,14 @@ Auto-capture hooks are currently only supported by Claude Code's hook system. Al
 | **GPU** | Not required (CPU-only inference) |
 | **Network** | Required once for setup (model download), then fully offline |
 
+## Who Uses OMEGA
+
+OMEGA is used by developers running Claude Code, Cursor, and Windsurf who need persistent memory across sessions. From solo developers to teams running multi-agent workflows.
+
+> *"I installed OMEGA and forgot about it. Two weeks later I realized my Claude sessions just... knew things from previous sessions."*
+
+If you're using OMEGA, [open a PR](https://github.com/omega-memory/omega-memory/pulls) to add yourself here.
+
 ## Remote / SSH Setup
 
 Run your agent on a remote server, SSH in from any device. OMEGA's memory graph is on the server waiting for you.
@@ -493,6 +496,10 @@ Manually remove OMEGA entries from `~/.claude/settings.json` and the `<!-- OMEGA
 - [Security Policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 - [Report a Bug](https://github.com/omega-memory/omega-memory/issues)
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=omega-memory/omega-memory&type=Date)](https://star-history.com/#omega-memory/omega-memory&Date)
 
 ## License
 
