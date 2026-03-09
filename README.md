@@ -176,6 +176,8 @@ Next session:
 
 Claude picks up exactly where you left off.
 
+More examples (CLI, Python API, scripting): **[docs/examples](docs/examples/README.md)**
+
 ## How It Compares
 
 | Feature | OMEGA | CLAUDE.md | Mem0 | Basic MCP Memory |

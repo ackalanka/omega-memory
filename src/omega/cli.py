@@ -131,7 +131,9 @@ def _inject_settings_hooks(hooks_src: Path):
         try:
             settings = json.loads(SETTINGS_JSON_PATH.read_text())
         except json.JSONDecodeError:
-            print("  WARNING: settings.json is malformed, skipping hook injection")
+            print("  WARNING: settings.json is malformed JSON, skipping hook injection.")
+            print(f"  To fix: validate or delete {SETTINGS_JSON_PATH} and re-run 'omega setup'.")
+            print("  Tip: Run 'python3 -m json.tool ~/.claude/settings.json' to find the syntax error.")
             return
     else:
         SETTINGS_JSON_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -283,7 +285,19 @@ def _download_bge_model(target_dir: Path, errors_ref: list) -> bool:
                 _download_file(url, target)
     except Exception as e:
         errors_ref.append(e)
+        err_str = str(e)
         print(f"  ERROR: bge model download failed: {e}")
+        if "urlopen" in err_str or "ConnectionError" in err_str or "timeout" in err_str:
+            print("\n  This looks like a network issue. Check:")
+            print("    - Your internet connection is active")
+            print("    - huggingface.co is not blocked by a firewall or proxy")
+            print("    - If behind a corporate proxy, set HTTPS_PROXY env var")
+        elif "Permission" in err_str or "EACCES" in err_str:
+            print(f"\n  Permission denied writing to {target_dir}")
+            print(f"  Fix: mkdir -p {target_dir} && chmod 755 {target_dir}")
+        elif "No space" in err_str or "ENOSPC" in err_str:
+            print("\n  Disk full. The bge model requires ~130 MB of free space.")
+            print("  Free up space and retry: omega setup --download-model")
         print("\n  To download manually, run:")
         for fname, url in files.items():
             if not (target_dir / fname).exists():
@@ -554,17 +568,28 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
                 errors_ref.append(1)
                 print(f"  ERROR: MCP registration returned code {result.returncode}")
                 if result.stderr:
-                    print(f"  {result.stderr.strip()}")
-                print(f"  Register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+                    stderr = result.stderr.strip()
+                    print(f"  {stderr}")
+                    if "already exists" in stderr.lower():
+                        print("  Tip: This may be fine -- the server was previously registered.")
+                        print("  Run 'omega doctor' to verify it works.")
+                print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
         except FileNotFoundError:
             errors_ref.append(1)
             print("  ERROR: 'claude' command not found in PATH.")
-            print("  Install Claude Code: https://docs.anthropic.com/en/docs/claude-code")
-            print(f"  Or register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+            print()
+            print("  Either:")
+            print("  1. Install Claude Code: npm install -g @anthropic-ai/claude-code")
+            print("  2. Or use a different client: omega setup --client cursor")
+            print(f"  3. Or register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+        except subprocess.TimeoutExpired:
+            errors_ref.append(1)
+            print("  ERROR: MCP registration timed out (>10s). The 'claude' command may be hanging.")
+            print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
         except Exception as e:
             errors_ref.append(1)
             print(f"  ERROR: MCP registration failed: {e}")
-            print(f"  Register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+            print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
     else:
         print("  Skipping MCP server registration (--hooks-only mode)")
         print("  Hooks will call bridge.py directly (~600MB RAM saved per session)")
@@ -590,13 +615,21 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
     # Wire hooks into settings.json
     try:
         _inject_settings_hooks(hooks_src)
+    except PermissionError as e:
+        errors_ref.append(1)
+        print(f"  ERROR: Permission denied writing to {SETTINGS_JSON_PATH}: {e}")
+        print(f"  Fix: chmod 644 {SETTINGS_JSON_PATH}")
     except Exception as e:
         errors_ref.append(1)
         print(f"  ERROR: Failed to configure settings.json hooks: {e}")
+        print(f"  You can manually add hooks -- see: omega doctor --fix")
 
     # Inject OMEGA block into CLAUDE.md
     try:
         _inject_claude_md()
+    except PermissionError as e:
+        print(f"  WARNING: Permission denied writing to {CLAUDE_MD_PATH}: {e}")
+        print(f"  Fix: chmod 644 {CLAUDE_MD_PATH}")
     except Exception as e:
         print(f"  WARNING: Failed to update CLAUDE.md: {e}")
 
@@ -808,8 +841,22 @@ def cmd_setup(args):
     """Set up OMEGA: create dirs, download model, initialize DB. Optionally configure a client."""
     # ── Python version check ──────────────────────────────────────────
     if sys.version_info < (3, 11):
-        print(f"ERROR: OMEGA requires Python 3.11 or higher (you have {sys.version_info.major}.{sys.version_info.minor}).")
-        print("Install Python 3.11+: https://www.python.org/downloads/")
+        v = f"{sys.version_info.major}.{sys.version_info.minor}"
+        print(f"ERROR: OMEGA requires Python 3.11 or higher (you have {v}).")
+        print()
+        if sys.platform == "darwin":
+            print("  To fix (macOS):")
+            print("    brew install python@3.12")
+            print("    python3.12 -m pip install omega-memory[server]")
+            print("    python3.12 -m omega.cli setup")
+        elif sys.platform == "linux":
+            print("  To fix (Linux):")
+            print("    sudo apt install python3.12 python3.12-venv  # Ubuntu/Debian")
+            print("    # or: sudo dnf install python3.12             # Fedora")
+            print("    python3.12 -m pip install omega-memory[server]")
+            print("    python3.12 -m omega.cli setup")
+        else:
+            print("  Install Python 3.11+: https://www.python.org/downloads/")
         sys.exit(1)
 
     client = getattr(args, "client", None)
@@ -887,7 +934,19 @@ def cmd_setup(args):
                         _download_file(url, target)
             except Exception as e:
                 errors.append(e)
+                err_str = str(e)
                 print(f"  ERROR: Model download failed: {e}")
+                if "urlopen" in err_str or "ConnectionError" in err_str or "timeout" in err_str:
+                    print("\n  This looks like a network issue. Check:")
+                    print("    - Your internet connection is active")
+                    print("    - huggingface.co is not blocked by a firewall or proxy")
+                    print("    - If behind a corporate proxy, set HTTPS_PROXY env var")
+                elif "Permission" in err_str or "EACCES" in err_str:
+                    print(f"\n  Permission denied writing to {MINILM_MODEL_DIR}")
+                    print(f"  Fix: mkdir -p {MINILM_MODEL_DIR} && chmod 755 {MINILM_MODEL_DIR}")
+                elif "No space" in err_str or "ENOSPC" in err_str:
+                    print("\n  Disk full. The embedding model requires ~90 MB of free space.")
+                    print("  Free up space and retry: omega setup")
                 print("\n  To download manually, run:")
                 for fname, url in minilm_files.items():
                     if not (MINILM_MODEL_DIR / fname).exists():
