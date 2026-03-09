@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-03-09
+
+### Changed
+- **Version bump to 1.x**: OMEGA is stable and production-ready. Adopting semantic
+  versioning 1.x to signal API stability.
+- Synced core files from upstream (preferences.py, test_types.py, plugins.py)
+
+### Fixed
+- **Security**: Removed pro-only files (protocol.py, license.py) that were
+  accidentally included in the public repository
+
 ## [0.12.0] - 2026-03-04
 
 ### Added

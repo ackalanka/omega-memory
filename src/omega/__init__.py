@@ -1,6 +1,6 @@
 """OMEGA — Persistent memory for AI coding agents.
 
-Direct Python API -- no MCP server required::
+Direct Python API — no MCP server required::
 
     from omega import store, query, remember
     store("Always use TypeScript strict mode", "user_preference")
@@ -10,7 +10,7 @@ For full Claude Code integration (MCP tools, auto-capture, coordination),
 install with: ``pip install omega-memory[server]``
 """
 
-__version__ = "0.12.0"
+__version__ = "1.1.0"
 
 from omega.sqlite_store import SQLiteStore
 from omega.bridge import (
