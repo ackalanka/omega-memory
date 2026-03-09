@@ -1,6 +1,6 @@
-"""OMEGA Plugin Interface — extensible discovery for additional modules.
+"""OMEGA Plugin Interface — extensible discovery for commercial modules.
 
-Core provides entry-point-based plugin discovery. Extension packages
+Core provides entry-point-based plugin discovery. Commercial packages
 register via ``[project.entry-points."omega.plugins"]`` in their pyproject.toml.
 """
 
