@@ -622,7 +622,7 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
     except Exception as e:
         errors_ref.append(1)
         print(f"  ERROR: Failed to configure settings.json hooks: {e}")
-        print(f"  You can manually add hooks -- see: omega doctor --fix")
+        print("  You can manually add hooks -- see: omega doctor --fix")
 
     # Inject OMEGA block into CLAUDE.md
     try:
