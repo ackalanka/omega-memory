@@ -108,7 +108,7 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     "sota_research": TTLCategory.PERMANENT,
     "research_report": TTLCategory.PERMANENT,
     "preference_generated": TTLCategory.PERMANENT,
-    # Long-term (90 days)
+    # Long-term (2 weeks)
     "reflexion": TTLCategory.LONG_TERM,
     "outcome_evaluation": TTLCategory.LONG_TERM,
     "self_reflection": TTLCategory.LONG_TERM,
@@ -121,9 +121,9 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     AutoCaptureEventType.CHECKPOINT: 604800,  # 7 days
     # Proactive reminders (permanent until dismissed)
     AutoCaptureEventType.REMINDER: None,
-    # Guardrail constraints (permanent -- always enforced)
+    # Guardrail constraints (permanent — always enforced)
     AutoCaptureEventType.CONSTRAINT: TTLCategory.PERMANENT,
-    # Trajectory distillation (permanent -- ACT-R decay handles pruning)
+    # Trajectory distillation (permanent — ACT-R decay handles pruning)
     AutoCaptureEventType.SKILL_TEMPLATE: TTLCategory.PERMANENT,
     # Behavioral pattern inference
     AutoCaptureEventType.BEHAVIORAL_PATTERN: TTLCategory.PERMANENT,

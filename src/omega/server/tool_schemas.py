@@ -49,8 +49,8 @@ TOOL_SCHEMAS = [
                 "query": {"type": "string", "description": "Search query (or exact phrase when mode='phrase'). Not required for mode='timeline' or mode='browse'."},
                 "mode": {
                     "type": "string",
-                    "enum": ["semantic", "phrase", "timeline", "browse"],
-                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day, 'browse' for listing",
+                    "enum": ["semantic", "phrase", "timeline", "browse", "trace"],
+                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day, 'browse' for listing, 'trace' for session tool call timeline",
                 },
                 "limit": {"type": "integer", "default": 10},
                 "event_type": {"type": "string", "description": "Filter by event type (also used as type filter in semantic mode for scoped search)"},
