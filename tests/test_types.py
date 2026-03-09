@@ -33,4 +33,4 @@ class TestForEventType:
 class TestAllExports:
     def test_all_contains_expected(self):
         import omega.types
-        assert set(omega.types.__all__) == {"TTLCategory", "AutoCaptureEventType", "EVENT_TYPE_TTL"}
+        assert set(omega.types.__all__) == {"TTLCategory", "AutoCaptureEventType", "EVENT_TYPE_TTL", "STABLE_EVENT_TYPES"}

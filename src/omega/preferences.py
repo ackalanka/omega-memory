@@ -183,6 +183,7 @@ def store_extracted_preferences(
         memory.store(
             content=content,
             session_id=session_id,
+            entity_id="omega",
             metadata={
                 "event_type": "user_preference",
                 "source": "implicit_extraction",
