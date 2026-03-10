@@ -5,10 +5,13 @@
 [🇨🇳 中文](translations/README_zh-CN.md) | [🇯🇵 日本語](translations/README_ja.md) | [🇰🇷 한국어](translations/README_ko.md) | [🇧🇷 Português](translations/README_pt-BR.md) | [🇪🇸 Español](translations/README_es.md) | [🇫🇷 Français](translations/README_fr.md) | [🇩🇪 Deutsch](translations/README_de.md) | [🇷🇺 Русский](translations/README_ru.md)
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
+[![PyPI downloads](https://img.shields.io/pypi/dm/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Tests](https://github.com/omega-memory/omega-memory/actions/workflows/test.yml/badge.svg)](https://github.com/omega-memory/omega-memory/actions/workflows/test.yml)
 [![#1 on LongMemEval](https://img.shields.io/badge/LongMemEval-95.4%25_%231_Overall-gold.svg)](https://omegamax.co/benchmarks)
+
+> **The open source, local-first alternative to [Mem0](https://mem0.ai).** No API keys. No cloud. Your data stays on your machine.
 
 <!-- mcp-name: io.github.omega-memory/omega-memory -->
 
@@ -492,11 +495,12 @@ pip3 uninstall omega-memory
 
 Manually remove OMEGA entries from `~/.claude/settings.json` and the `<!-- OMEGA:BEGIN -->` block from `~/.claude/CLAUDE.md`.
 
-## Contributing
+## Links
 
+- [Website & Docs](https://omegamax.co) -- full documentation, benchmarks, and comparison pages
+- [Changelog](CHANGELOG.md)
 - [Contributing Guide](CONTRIBUTING.md)
 - [Security Policy](SECURITY.md)
-- [Changelog](CHANGELOG.md)
 - [Report a Bug](https://github.com/omega-memory/omega-memory/issues)
 
 ## Star History
