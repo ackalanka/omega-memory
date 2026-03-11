@@ -557,7 +557,7 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
         python_path = _resolve_python_path()
         try:
             result = subprocess.run(
-                ["claude", "mcp", "add", "omega-memory", "--", python_path, "-m", "omega.server.mcp_server"],
+                ["claude", "mcp", "add", "-s", "user", "omega-memory", "--", python_path, "-m", "omega.server.mcp_server"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -573,7 +573,7 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
                     if "already exists" in stderr.lower():
                         print("  Tip: This may be fine -- the server was previously registered.")
                         print("  Run 'omega doctor' to verify it works.")
-                print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+                print(f"  To register manually: claude mcp add -s user omega-memory -- {python_path} -m omega.server.mcp_server")
         except FileNotFoundError:
             errors_ref.append(1)
             print("  ERROR: 'claude' command not found in PATH.")
@@ -581,15 +581,15 @@ def _setup_claude_code(errors_ref: list, hooks_src: Path, hooks_only: bool = Fal
             print("  Either:")
             print("  1. Install Claude Code: npm install -g @anthropic-ai/claude-code")
             print("  2. Or use a different client: omega setup --client cursor")
-            print(f"  3. Or register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+            print(f"  3. Or register manually: claude mcp add -s user omega-memory -- {python_path} -m omega.server.mcp_server")
         except subprocess.TimeoutExpired:
             errors_ref.append(1)
             print("  ERROR: MCP registration timed out (>10s). The 'claude' command may be hanging.")
-            print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+            print(f"  To register manually: claude mcp add -s user omega-memory -- {python_path} -m omega.server.mcp_server")
         except Exception as e:
             errors_ref.append(1)
             print(f"  ERROR: MCP registration failed: {e}")
-            print(f"  To register manually: claude mcp add omega-memory -- {python_path} -m omega.server.mcp_server")
+            print(f"  To register manually: claude mcp add -s user omega-memory -- {python_path} -m omega.server.mcp_server")
     else:
         print("  Skipping MCP server registration (--hooks-only mode)")
         print("  Hooks will call bridge.py directly (~600MB RAM saved per session)")

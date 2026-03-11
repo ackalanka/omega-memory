@@ -470,7 +470,7 @@ All changes are idempotent.
 
 **MCP server not registered:**
 ```bash
-claude mcp add omega-memory -- python3 -m omega.server.mcp_server
+claude mcp add -s user omega-memory -- python3 -m omega.server.mcp_server
 ```
 
 **Hooks not firing:**
