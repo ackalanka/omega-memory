@@ -36,6 +36,7 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "description": "Agent type for sub-agent memory scoping (e.g., 'code-reviewer', 'test-runner').",
                 },
+                "items": {"type": "array", "items": {"type": "object"}, "description": "Batch mode: list of {content, event_type, metadata} dicts. When provided, stores all items. Other top-level params ignored."},
             },
             "required": ["content"],
         },
@@ -49,8 +50,8 @@ TOOL_SCHEMAS = [
                 "query": {"type": "string", "description": "Search query (or exact phrase when mode='phrase'). Not required for mode='timeline' or mode='browse'."},
                 "mode": {
                     "type": "string",
-                    "enum": ["semantic", "phrase", "timeline", "browse", "trace"],
-                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day, 'browse' for listing, 'trace' for session tool call timeline",
+                    "enum": ["semantic", "phrase", "timeline", "browse", "trace", "unified"],
+                    "description": "Search mode: 'semantic' (default), 'phrase' for exact match, 'timeline' for recent memories by day, 'browse' for listing, 'trace' for session tool call timeline, 'unified' for cross-searching memories + knowledge documents",
                 },
                 "limit": {"type": "integer", "default": 10},
                 "event_type": {"type": "string", "description": "Filter by event type (also used as type filter in semantic mode for scoped search)"},
@@ -78,7 +79,7 @@ TOOL_SCHEMAS = [
                 "perspective": {
                     "type": "string",
                     "enum": ["implementation", "critique", "verification"],
-                    "description": "Behavioral diversity lens. Biases retrieval toward different memory types: 'implementation' boosts errors/lessons/code, 'critique' boosts constraints/preferences/contradictions, 'verification' boosts decisions/benchmarks/evaluations.",
+                    "description": "Behavioral diversity lens. Biases retrieval toward different memory types: 'implementation' boosts errors/lessons/code, 'critique' boosts constraints/preferences/contradictions, 'verification' boosts decisions/benchmarks/evaluations. Auto-set from session role in multi-agent mode.",
                 },
                 "strength_min": {
                     "type": "number",
@@ -204,11 +205,11 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_maintain",
-        "description": "System housekeeping for the memory store. Use 'health' to check database size and integrity, 'consolidate' to prune stale memories, 'compact' to merge near-duplicates, 'backup'/'restore' for data safety, 'clear_session' to purge a session's data. Call periodically or when memory grows large.",
+        "description": "System housekeeping and constraint management. Use 'health' to check database size and integrity, 'consolidate' to prune stale memories, 'compact' to merge near-duplicates, 'backup'/'restore' for data safety, 'clear_session' to purge a session's data, 'synthesize_insights' to generate system insights, 'backfill_embeddings' to fill missing vectors, 'list_constraints'/'check_constraint'/'save_constraints' to manage file constraint rules.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["health", "consolidate", "compact", "backup", "restore", "clear_session"], "description": "Maintenance operation"},
+                "action": {"type": "string", "enum": ["health", "consolidate", "compact", "backup", "restore", "clear_session", "synthesize_insights", "backfill_embeddings", "list_constraints", "check_constraint", "save_constraints"], "description": "Maintenance operation"},
                 "warn_mb": {"type": "number", "description": "Warning threshold MB (health, default 350)", "default": 350},
                 "critical_mb": {"type": "number", "description": "Critical threshold MB (health, default 800)", "default": 800},
                 "max_nodes": {"type": "integer", "description": "Max expected nodes (health, default 10000)", "default": 10000},
@@ -221,6 +222,9 @@ TOOL_SCHEMAS = [
                 "filepath": {"type": "string", "description": "File path (backup/restore)"},
                 "clear_existing": {"type": "boolean", "description": "Clear before restore (default true)", "default": True},
                 "session_id": {"type": "string", "description": "Session to purge (clear_session)"},
+                "file_path": {"type": "string", "description": "File path to check (only for action='check_constraint')"},
+                "rules": {"type": "array", "items": {"type": "object"}, "description": "Constraint rules to save (only for action='save_constraints'). Each: {pattern, constraint, severity}"},
+                "batch_size": {"type": "integer", "description": "Batch size (only for action='backfill_embeddings', default 50)", "default": 50},
             },
             "required": ["action"],
         },
@@ -233,7 +237,7 @@ TOOL_SCHEMAS = [
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["types", "sessions", "digest", "forgetting_log", "dedup", "milestones", "access_rate", "diagnostic", "habits_list", "habits_confirm", "habits_deny", "habits_analyze", "habits_profile", "habits_recommendations"],
+                    "enum": ["types", "sessions", "digest", "forgetting_log", "dedup", "milestones", "access_rate", "diagnostic", "habits_list", "habits_confirm", "habits_deny", "habits_analyze", "habits_profile", "habits_recommendations", "graph_stats"],
                     "description": "Which stats/insights to retrieve. 'diagnostic' returns a unified health/value report. habits_* actions manage behavioral patterns.",
                 },
                 "days": {"type": "integer", "description": "Days for digest (default 7)", "default": 7},

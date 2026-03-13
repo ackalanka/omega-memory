@@ -70,8 +70,21 @@ class AutoCaptureEventType:
     # Proactive reminders
     REMINDER = "reminder"
 
+    # Oracle prediction intelligence (pro-only)
+    ORACLE_PREDICTION = "oracle_prediction"
+    ORACLE_WALLET_SCORE = "oracle_wallet_score"
+    ORACLE_REGIME_CHANGE = "oracle_regime_change"
+    ORACLE_SIGNAL_SNAPSHOT = "oracle_signal_snapshot"
+
     # Behavioral pattern inference
     BEHAVIORAL_PATTERN = "behavioral_pattern"
+
+    # Say/Do contradiction tracking (pro-only)
+    PUBLIC_STATEMENT = "public_statement"
+    OUTCOME_RESOLUTION = "outcome_resolution"
+    CONTRADICTION_DETECTED = "contradiction_detected"
+    ENTITY_PROFILE_UPDATE = "entity_profile_update"
+    PREDICTION_SNAPSHOT = "prediction_snapshot"
 
     # Experiential memory: distilled session trajectories
     SKILL_TEMPLATE = "skill_template"
@@ -125,8 +138,19 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     AutoCaptureEventType.CONSTRAINT: TTLCategory.PERMANENT,
     # Trajectory distillation (permanent — ACT-R decay handles pruning)
     AutoCaptureEventType.SKILL_TEMPLATE: TTLCategory.PERMANENT,
+    # Oracle prediction intelligence (pro-only)
+    AutoCaptureEventType.ORACLE_PREDICTION: TTLCategory.LONG_TERM,  # 90 days; no query path surfaces these
+    AutoCaptureEventType.ORACLE_WALLET_SCORE: TTLCategory.LONG_TERM,
+    AutoCaptureEventType.ORACLE_REGIME_CHANGE: TTLCategory.PERMANENT,
+    AutoCaptureEventType.ORACLE_SIGNAL_SNAPSHOT: TTLCategory.LONG_TERM,
     # Behavioral pattern inference
     AutoCaptureEventType.BEHAVIORAL_PATTERN: TTLCategory.PERMANENT,
+    # Say/Do contradiction tracking (pro-only)
+    AutoCaptureEventType.PUBLIC_STATEMENT: TTLCategory.PERMANENT,
+    AutoCaptureEventType.OUTCOME_RESOLUTION: TTLCategory.PERMANENT,
+    AutoCaptureEventType.CONTRADICTION_DETECTED: TTLCategory.PERMANENT,
+    AutoCaptureEventType.ENTITY_PROFILE_UPDATE: TTLCategory.LONG_TERM,
+    AutoCaptureEventType.PREDICTION_SNAPSHOT: TTLCategory.LONG_TERM,
     # Short-term (1 day)
     "sota_scan": TTLCategory.SHORT_TERM,
     "merge_claim": TTLCategory.SHORT_TERM,
@@ -142,8 +166,29 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
 }
 
 
+# ============================================================================
+# Stability Classification for Prompt Cache Optimization
+# ============================================================================
+# Event types whose content rarely changes across sessions.
+# Used by hook output builders to place stable content first (cache-friendly prefix)
+# and volatile content last (cache-busting suffix).
+
+STABLE_EVENT_TYPES = frozenset({
+    "user_preference",
+    "user_fact",
+    "constraint",
+    "decision",
+    "lesson_learned",
+    "error_pattern",
+    "advisor_insight",
+    "behavioral_pattern",
+    "project_context",
+})
+
+
 __all__ = [
     "TTLCategory",
     "AutoCaptureEventType",
     "EVENT_TYPE_TTL",
+    "STABLE_EVENT_TYPES",
 ]
