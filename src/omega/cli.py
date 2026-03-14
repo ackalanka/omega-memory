@@ -1344,6 +1344,32 @@ def cmd_export(args):
         print(result)
 
 
+def cmd_export_obsidian(args):
+    """Export memories as Obsidian-compatible markdown files."""
+    output_dir = getattr(args, "output_dir", "./omega-vault")
+    project = getattr(args, "project", None)
+    limit = getattr(args, "limit", 0)
+
+    print(f"Exporting OMEGA memories to Obsidian vault: {output_dir}")
+
+    from omega.obsidian_export import export_to_obsidian
+
+    result = export_to_obsidian(
+        output_dir=output_dir,
+        project=project,
+        limit=limit,
+    )
+
+    print(f"\nExported {result['memories_exported']} memories to {result['output_dir']}/")
+    if result.get("type_breakdown"):
+        print("\nBy type:")
+        for event_type, count in sorted(result["type_breakdown"].items(), key=lambda x: -x[1]):
+            print(f"  {event_type}: {count}")
+    if result.get("edge_links_created", 0) > 0:
+        print(f"\nWikilinks created: {result['edge_links_created']}")
+    print(f"Index file: {result['index_file']}")
+
+
 def cmd_import(args):
     """Import memories from a JSON file."""
     filepath = args.filepath
@@ -2442,6 +2468,22 @@ def main():
         choices=["memory", "decision", "lesson_learned", "error_pattern", "user_preference", "task_completion"],
         help="Export only memories of this type",
     )
+    export_obsidian_parser = subparsers.add_parser(
+        "export-obsidian", help="Export memories as Obsidian-compatible markdown files"
+    )
+    export_obsidian_parser.add_argument(
+        "--output-dir", default="./omega-vault",
+        help="Output directory for the Obsidian vault (default: ./omega-vault)",
+    )
+    export_obsidian_parser.add_argument(
+        "--project", default=None,
+        help="Only export memories for this project",
+    )
+    export_obsidian_parser.add_argument(
+        "--limit", type=int, default=0,
+        help="Max number of memories to export (default: all)",
+    )
+
     import_parser = subparsers.add_parser("import", help="Import memories from a JSON file")
     import_parser.add_argument("filepath", help="Input file path (e.g. memories.json)")
     import_parser.add_argument("--clear", action="store_true", help="Clear existing memories before import")
@@ -2558,6 +2600,7 @@ def main():
         "consolidate": cmd_consolidate,
         "backup": cmd_backup,
         "export": cmd_export,
+        "export-obsidian": cmd_export_obsidian,
         "import": cmd_import,
         "compact": cmd_compact,
         "stats": cmd_stats,
