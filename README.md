@@ -13,6 +13,8 @@
 
 > **The open source, local-first alternative to [Mem0](https://mem0.ai).** No API keys. No cloud. Your data stays on your machine.
 
+**Listed on**: [Official MCP Registry](https://registry.modelcontextprotocol.io) · [awesome-mcp-servers](https://github.com/punkpeye/awesome-mcp-servers) (80K+ stars) · [awesome-nostr](https://github.com/aljazceru/awesome-nostr) · [awesome-L402](https://github.com/Fewsats/awesome-L402) · [mcp.so](https://mcp.so) · [mcpservers.org](https://mcpservers.org)
+
 <!-- mcp-name: io.github.omega-memory/omega-memory -->
 
 ```bash
