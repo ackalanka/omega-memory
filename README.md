@@ -24,7 +24,7 @@ omega setup
 
 Works with **Claude Code** | **Cursor** | **Windsurf** | **Zed** | any MCP client
 
-![OMEGA demo — without memory vs. with OMEGA](https://raw.githubusercontent.com/omega-memory/omega-memory/main/assets/demo.gif)
+[![Watch the demo](https://img.youtube.com/vi/hTtNPGnQcMA/maxresdefault.jpg)](https://youtu.be/hTtNPGnQcMA)
 
 ---
 
