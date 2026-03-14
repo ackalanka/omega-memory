@@ -12,6 +12,8 @@ Quick reference (protocol has full details):
 - After completing tasks: `omega_store(content, "decision")` for key outcomes
 - User says "remember": `omega_store(text, "user_preference")`
 - Context getting full: `omega_checkpoint` to save state
+- Load user context: `omega_profile()` after welcome/protocol
+- Before architecture decisions: `omega_reflect(action="evolution", topic=<domain>)` to check prior thinking
 
 If OMEGA is unavailable, use basic coordination:
 - Before state changes: check `git log` and ask before deploying
