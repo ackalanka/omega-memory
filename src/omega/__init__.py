@@ -21,8 +21,6 @@ if sys.version_info < (3, 11):
 
 __version__ = "1.2.0"
 
-# oops forgot to import version first
-
 from omega.sqlite_store import SQLiteStore
 from omega.bridge import (
     remember,
