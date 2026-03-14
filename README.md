@@ -93,6 +93,35 @@ Add to your editor's MCP config file:
 </details>
 
 <details>
+<summary><strong>Cursor setup</strong></summary>
+
+Cursor is an AI-first code editor built for pair programming with LLMs.
+
+```bash
+pip3 install omega-memory[server]
+omega setup --client cursor
+```
+
+This creates (or updates) `~/.cursor/mcp.json` with the OMEGA server configuration.
+
+**Manual setup:** If you prefer to configure Cursor manually, add this to your `.cursor/mcp.json`:
+
+```json
+{
+  "mcpServers": {
+    "omega-memory": {
+      "command": "python3",
+      "args": ["-m", "omega.server.mcp_server"]
+    }
+  }
+}
+```
+
+After configuring Cursor, restart it and start a new chat. OMEGA will automatically capture and recall context across your Cursor sessions.
+
+</details>
+
+<details>
 <summary><strong>Alternative install methods</strong></summary>
 
 ```bash
