@@ -156,3 +156,12 @@ async def test_omega_call_missing_tool():
     result = await handle_omega_call({})
     text = result["content"][0]["text"]
     assert "missing" in text.lower()
+
+
+@pytest.mark.asyncio
+async def test_omega_call_rejects_meta_tools():
+    """omega_call should reject recursive calls to meta-tools."""
+    for meta_tool in ("omega_call", "omega_tools"):
+        result = await handle_omega_call({"tool": meta_tool})
+        text = result["content"][0]["text"]
+        assert "meta-tool" in text.lower(), f"Expected rejection for {meta_tool}"

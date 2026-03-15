@@ -1412,6 +1412,9 @@ async def handle_omega_call(args: Dict[str, Any]) -> dict:
     if not tool_name:
         return mcp_error("Required parameter 'tool' is missing.")
 
+    if tool_name in ("omega_call", "omega_tools"):
+        return mcp_error("Cannot call meta-tools through omega_call. Use them directly.")
+
     handler = _ALL_HANDLERS.get(tool_name)
     if not handler:
         return mcp_error(f"Unknown tool: {tool_name}. Use omega_tools() to list available tools.")
