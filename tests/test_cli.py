@@ -15,14 +15,14 @@ from omega.cli import (
     _inject_claude_md,
     _inject_settings_hooks,
     _resolve_python_path,
+    _use_json,
     OMEGA_BEGIN,
     OMEGA_END,
+    cmd_doctor,
     cmd_query,
     cmd_remember,
-    cmd_stats,
     cmd_status,
     cmd_store,
-    cmd_timeline,
 )
 
 
@@ -45,27 +45,29 @@ class TestResolvePythonPath:
         # The result should be some valid python path string
         assert "python" in result.lower() or Path(result).exists()
 
-    def test_uses_venv_executable_when_omega_importable(self, monkeypatch):
-        """Venv python should be used if omega is importable from it (PR #38)."""
+    def test_prefers_venv_with_omega(self, monkeypatch):
+        """If sys.executable is in a venv that has omega, it should be returned."""
         monkeypatch.setattr(sys, "executable", "/tmp/my_venv/bin/python3")
-        with patch("omega.cli._python_has_omega", return_value=True):
-            with patch("omega.cli.Path.exists", return_value=True):
-                result = _resolve_python_path()
-        assert result == "/tmp/my_venv/bin/python3"
+        with patch("omega.cli._python_has_omega", return_value=True), \
+             patch("omega.cli.Path.exists", return_value=True):
+            result = _resolve_python_path()
+        assert "my_venv" in result
 
     def test_falls_back_to_which_python3(self, monkeypatch):
         """When sys.executable is empty, should try shutil.which('python3')."""
         monkeypatch.setattr(sys, "executable", "")
-        with patch("omega.cli.shutil.which", return_value="/usr/bin/python3"):
-            with patch("omega.cli._python_has_omega", return_value=True):
-                result = _resolve_python_path()
+        with patch("omega.cli.shutil.which", return_value="/usr/bin/python3"), \
+             patch("omega.cli._python_has_omega", return_value=True), \
+             patch("omega.cli.Path.exists", return_value=True):
+            result = _resolve_python_path()
         assert result == "/usr/bin/python3"
 
     def test_fallback_when_nothing_works(self, monkeypatch):
         """When sys.executable is empty and shutil.which returns None, returns fallback."""
         monkeypatch.setattr(sys, "executable", "")
-        with patch("omega.cli.shutil.which", return_value=None):
-            with patch("omega.cli.Path.exists", return_value=False):
+        with patch("omega.cli.shutil.which", return_value=None), \
+             patch("omega.cli._python_has_omega", return_value=False), \
+             patch("omega.cli.Path.exists", return_value=False):
                 result = _resolve_python_path()
         # Should return "python3" as last resort (empty exe or "python3")
         assert result in ("", "python3")
@@ -161,6 +163,68 @@ class TestCLITypeMap:
 
 
 # ============================================================================
+# _use_json()
+# ============================================================================
+
+
+class TestUseJson:
+    """Tests for _use_json() helper."""
+
+    def test_false_by_default(self):
+        args = argparse.Namespace()
+        assert _use_json(args) is False
+
+    def test_true_when_json_flag_set(self):
+        args = argparse.Namespace(json=True)
+        assert _use_json(args) is True
+
+    def test_false_when_json_flag_false(self):
+        args = argparse.Namespace(json=False)
+        assert _use_json(args) is False
+
+    def test_true_when_env_var_set(self, monkeypatch):
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        args = argparse.Namespace()
+        assert _use_json(args) is True
+
+    def test_false_when_env_var_not_1(self, monkeypatch):
+        monkeypatch.setenv("OMEGA_JSON", "true")
+        args = argparse.Namespace()
+        assert _use_json(args) is False
+
+    def test_env_var_overrides_missing_flag(self, monkeypatch):
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        args = argparse.Namespace()  # no json attr
+        assert _use_json(args) is True
+
+    def test_flag_works_without_env_var(self, monkeypatch):
+        monkeypatch.delenv("OMEGA_JSON", raising=False)
+        args = argparse.Namespace(json=True)
+        assert _use_json(args) is True
+
+
+# ============================================================================
+# OMEGA_JSON env var integration
+# ============================================================================
+
+
+class TestOmegaJsonEnvVar:
+    """Tests that OMEGA_JSON=1 env var triggers JSON output on existing commands."""
+
+    def test_query_respects_env_var(self, capsys, monkeypatch):
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        mock_results = [{"content": "env var test", "relevance": 0.9, "event_type": "memory"}]
+        args = argparse.Namespace(query_text=["hello"], limit=10, json=False, exact=False)
+        with patch("omega.cli.time") as mock_time:
+            mock_time.monotonic.side_effect = [0.0, 0.02]
+            with patch("omega.bridge.query_structured", return_value=mock_results):
+                cmd_query(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["count"] == 1
+
+
+# ============================================================================
 # _inject_claude_md()
 # ============================================================================
 
@@ -175,7 +239,7 @@ class TestInjectClaudeMd:
         self.data_dir = tmp_path / "data"
         self.data_dir.mkdir()
 
-        # Create a minimal fragment file
+        # Create a minimal fragment file (core)
         self.fragment_text = (
             "<!-- OMEGA:BEGIN — managed by omega setup, do not edit this block -->\n"
             "## Memory (OMEGA)\n"
@@ -185,8 +249,21 @@ class TestInjectClaudeMd:
         )
         (self.data_dir / "claude-md-fragment.md").write_text(self.fragment_text + "\n")
 
+        # Create a Pro fragment file
+        self.pro_fragment_text = (
+            "<!-- OMEGA:BEGIN — managed by omega setup, do not edit this block -->\n"
+            "## Memory (OMEGA)\n"
+            "\n"
+            "- `omega_remember(text)` — user says \"remember\"\n"
+            "- Multi-agent coordination enabled\n"
+            "<!-- OMEGA:END -->"
+        )
+        (self.data_dir / "claude-md-fragment-pro.md").write_text(self.pro_fragment_text + "\n")
+
         monkeypatch.setattr("omega.cli.CLAUDE_MD_PATH", self.claude_md)
         monkeypatch.setattr("omega.cli.DATA_DIR", self.data_dir)
+        # Default to core (non-commercial)
+        monkeypatch.setattr("omega.cli._has_commercial_modules", lambda: False)
 
     def test_creates_new_file(self, capsys):
         """If CLAUDE.md does not exist, it should be created with the fragment."""
@@ -235,24 +312,91 @@ class TestInjectClaudeMd:
         _inject_claude_md()
         assert "already up to date" in capsys.readouterr().out
 
-    def test_replaces_plain_memory_section(self, capsys):
-        """If there is a plain '## Memory (OMEGA)' section (no markers), replace it."""
+    def test_preserves_plain_memory_section(self, capsys):
+        """Plain '## Memory (OMEGA)' without markers should NOT be replaced — append instead."""
         self.claude_md.parent.mkdir(parents=True, exist_ok=True)
         plain_content = (
             "# Config\n\n"
             "## Memory (OMEGA)\n"
-            "- Some old plain instructions\n"
-            "- More old stuff\n"
+            "- Some user-written instructions\n"
+            "- More user stuff\n"
             "\n"
             "## Other Section\n"
         )
         self.claude_md.write_text(plain_content)
         _inject_claude_md()
         content = self.claude_md.read_text()
-        assert "Some old plain instructions" not in content
+        # User content preserved
+        assert "Some user-written instructions" in content
+        # OMEGA block appended (not replacing user content)
         assert OMEGA_BEGIN in content
         assert "## Other Section" in content
-        assert "replaced plain" in capsys.readouterr().out
+        assert "appended" in capsys.readouterr().out
+
+    def test_backup_on_first_append(self, capsys):
+        """First-time append to existing file should create a .pre-omega backup."""
+        self.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        self.claude_md.write_text("# My Custom Config\n\nImportant stuff.\n")
+        _inject_claude_md()
+        backup = self.claude_md.with_suffix(".md.pre-omega")
+        assert backup.exists()
+        assert backup.read_text() == "# My Custom Config\n\nImportant stuff.\n"
+        assert "backed up" in capsys.readouterr().out
+
+    def test_no_backup_if_empty(self, capsys):
+        """Empty CLAUDE.md should not create a backup."""
+        self.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        self.claude_md.write_text("")
+        _inject_claude_md()
+        backup = self.claude_md.with_suffix(".md.pre-omega")
+        assert not backup.exists()
+
+    def test_no_duplicate_backup(self, capsys):
+        """If backup already exists, don't overwrite it."""
+        self.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        backup = self.claude_md.with_suffix(".md.pre-omega")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        backup.write_text("original backup content")
+        self.claude_md.write_text("# New content\n")
+        _inject_claude_md()
+        # Original backup preserved
+        assert backup.read_text() == "original backup content"
+
+    def test_dry_run_no_changes(self, capsys):
+        """Dry run should report what would happen without writing."""
+        self.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        self.claude_md.write_text("# My Config\n")
+        _inject_claude_md(dry_run=True)
+        # File should be unchanged
+        assert self.claude_md.read_text() == "# My Config\n"
+        assert OMEGA_BEGIN not in self.claude_md.read_text()
+        output = capsys.readouterr().out
+        assert "dry-run" in output
+
+    def test_dry_run_update(self, capsys):
+        """Dry run on existing block should not write."""
+        self.claude_md.parent.mkdir(parents=True, exist_ok=True)
+        old_block = (
+            "<!-- OMEGA:BEGIN — old -->\nold\n<!-- OMEGA:END -->"
+        )
+        self.claude_md.write_text(old_block)
+        _inject_claude_md(dry_run=True)
+        assert self.claude_md.read_text() == old_block
+        assert "dry-run" in capsys.readouterr().out
+
+    def test_pro_fragment_selected(self, monkeypatch, capsys):
+        """Commercial modules present should select the Pro fragment."""
+        monkeypatch.setattr("omega.cli._has_commercial_modules", lambda: True)
+        _inject_claude_md()
+        content = self.claude_md.read_text()
+        assert "Multi-agent coordination enabled" in content
+
+    def test_core_fragment_selected(self, capsys):
+        """Without commercial modules, core fragment is used."""
+        _inject_claude_md()
+        content = self.claude_md.read_text()
+        assert "Multi-agent coordination enabled" not in content
+        assert "omega_remember" in content
 
 
 # ============================================================================
@@ -282,7 +426,7 @@ class TestInjectSettingsHooks:
                 {"script": "surface_memories.py", "timeout": 5000, "matcher": "Edit|Write"}
             ],
         }
-        (self.data_dir / "hooks-core.json").write_text(json.dumps(manifest))
+        (self.data_dir / "hooks.json").write_text(json.dumps(manifest))
 
         monkeypatch.setattr("omega.cli.SETTINGS_JSON_PATH", self.settings_json)
         monkeypatch.setattr("omega.cli.DATA_DIR", self.data_dir)
@@ -458,6 +602,28 @@ class TestCmdStore:
                 content="some error", event_type="error_pattern"
             )
 
+    def test_json_output_mode(self, capsys):
+        """--json flag should output JSON with status and content."""
+        args = argparse.Namespace(content=["test", "memory"], type="memory", json=True)
+        with patch("omega.bridge.store") as mock_store:
+            cmd_store(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["status"] == "ok"
+        assert parsed["content"] == "test memory"
+        assert parsed["type"] == "memory"
+
+    def test_json_via_env_var(self, capsys, monkeypatch):
+        """OMEGA_JSON=1 should trigger JSON output."""
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        args = argparse.Namespace(content=["env", "test"], type="decision", json=False)
+        with patch("omega.bridge.store"):
+            cmd_store(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["status"] == "ok"
+        assert parsed["type"] == "decision"
+
 
 # ============================================================================
 # cmd_remember()
@@ -493,6 +659,26 @@ class TestCmdRemember:
         out = capsys.readouterr().out
         # The print uses text[:120], so output should not contain the full 200 chars
         assert "Remembered:" in out
+
+    def test_json_output_mode(self, capsys):
+        """--json flag should output JSON with status and content."""
+        args = argparse.Namespace(text=["prefer", "dark", "mode"], json=True)
+        with patch("omega.bridge.remember", return_value={"status": "ok"}):
+            cmd_remember(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["status"] == "ok"
+        assert parsed["content"] == "prefer dark mode"
+
+    def test_json_via_env_var(self, capsys, monkeypatch):
+        """OMEGA_JSON=1 should trigger JSON output."""
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        args = argparse.Namespace(text=["use", "vim"], json=False)
+        with patch("omega.bridge.remember", return_value={"status": "ok"}):
+            cmd_remember(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["status"] == "ok"
 
 
 # ============================================================================
@@ -534,107 +720,6 @@ class TestCmdDoctorBridgeCheck:
 
 
 # ============================================================================
-# cmd_status() --json
-# ============================================================================
-
-
-class TestCmdStatusJson:
-    """Tests for cmd_status --json output."""
-
-    def test_json_output_mode(self, capsys):
-        """--json flag should output valid JSON with expected keys."""
-        fake_data = {
-            "backend": "sqlite",
-            "memory_count": 42,
-            "db_size_mb": 1.5,
-            "vector_search": True,
-            "model": "bge-small-en-v1.5",
-        }
-        args = argparse.Namespace(json=True)
-
-        with patch("omega.cli._collect_status_data", return_value=fake_data):
-            cmd_status(args)
-
-        out = capsys.readouterr().out
-        parsed = json.loads(out)
-        assert parsed["memory_count"] == 42
-        assert parsed["backend"] == "sqlite"
-
-
-# ============================================================================
-# cmd_timeline() --json
-# ============================================================================
-
-
-class TestCmdTimelineJson:
-    """Tests for cmd_timeline --json output."""
-
-    def test_json_output_mode(self, capsys):
-        """--json flag should output valid JSON grouped by day."""
-        from unittest.mock import MagicMock
-
-        node = MagicMock()
-        node.id = "abc123"
-        node.content = "test timeline entry"
-        node.metadata = {"event_type": "decision"}
-        node.created_at = datetime(2026, 2, 20, 10, 30, tzinfo=timezone.utc)
-
-        fake_timeline = {"2026-02-20": [node]}
-        args = argparse.Namespace(days=7, json=True)
-
-        mock_store = MagicMock()
-        mock_store.get_timeline.return_value = fake_timeline
-
-        with patch("omega.bridge._get_store", return_value=mock_store):
-            cmd_timeline(args)
-
-        out = capsys.readouterr().out
-        parsed = json.loads(out)
-        assert "2026-02-20" in parsed
-        assert parsed["2026-02-20"][0]["id"] == "abc123"
-        assert parsed["2026-02-20"][0]["event_type"] == "decision"
-
-    def test_json_empty_timeline(self, capsys):
-        """Empty timeline should output empty JSON object."""
-        from unittest.mock import MagicMock
-
-        args = argparse.Namespace(days=7, json=True)
-        mock_store = MagicMock()
-        mock_store.get_timeline.return_value = {}
-
-        with patch("omega.bridge._get_store", return_value=mock_store):
-            cmd_timeline(args)
-
-        out = capsys.readouterr().out
-        parsed = json.loads(out)
-        assert parsed == {}
-
-
-# ============================================================================
-# cmd_stats() --json
-# ============================================================================
-
-
-class TestCmdStatsJson:
-    """Tests for cmd_stats --json output."""
-
-    def test_json_output_mode(self, capsys):
-        """--json flag should output valid JSON with types and health."""
-        fake_stats = {"decision": 10, "lesson_learned": 5, "error_pattern": 3}
-        fake_health = {"db_size_mb": 2.0, "edge_count": 15, "backend": "sqlite"}
-        args = argparse.Namespace(json=True)
-
-        with patch("omega.bridge.type_stats", return_value=fake_stats), \
-             patch("omega.bridge.status", return_value=fake_health):
-            cmd_stats(args)
-
-        out = capsys.readouterr().out
-        parsed = json.loads(out)
-        assert parsed["types"]["decision"] == 10
-        assert parsed["health"]["db_size_mb"] == 2.0
-
-
-# ============================================================================
 # Redundant import cleanup
 # ============================================================================
 
@@ -648,3 +733,191 @@ class TestModuleLevelImports:
         assert hasattr(cli, "timedelta")
         from datetime import timedelta as _td
         assert cli.timedelta is _td
+
+
+class TestCmdStatus:
+    """Tests for cmd_status() CLI command."""
+
+    def test_json_output_mode(self, capsys, tmp_path, monkeypatch):
+        """--json flag should output structured JSON status."""
+        import sqlite3
+
+        # Create a minimal omega.db
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.execute("INSERT INTO memories VALUES ('m1', 'test', '{}')")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+
+        args = argparse.Namespace(json=True)
+        cmd_status(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["backend"] == "sqlite"
+        assert parsed["memories"] == 1
+        assert "size_mb" in parsed
+
+    def test_json_via_env_var(self, capsys, tmp_path, monkeypatch):
+        """OMEGA_JSON=1 should trigger JSON output."""
+        import sqlite3
+
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+
+        args = argparse.Namespace(json=False)
+        cmd_status(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert "backend" in parsed
+
+    def test_json_no_database(self, capsys, tmp_path, monkeypatch):
+        """JSON output when no database exists should show null backend."""
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+
+        args = argparse.Namespace(json=True)
+        cmd_status(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["backend"] is None
+        assert parsed["memories"] == 0
+
+    def test_json_cloud_status(self, capsys, tmp_path, monkeypatch):
+        """JSON output should include cloud status."""
+        import sqlite3
+
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.commit()
+        conn.close()
+
+        # Create secrets to simulate configured cloud
+        (tmp_path / "secrets.json").write_text("{}")
+        (tmp_path / "last-cloud-pull").write_text("2026-02-26T10:00:00Z")
+
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+
+        args = argparse.Namespace(json=True)
+        cmd_status(args)
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert parsed["cloud"]["configured"] is True
+        assert parsed["cloud"]["last_pull"] == "2026-02-26T10:00:00Z"
+
+
+# ============================================================================
+# cmd_doctor() JSON output
+# ============================================================================
+
+
+class TestCmdDoctorJson:
+    """Tests for cmd_doctor() JSON output."""
+
+    def test_json_output_structure(self, capsys, tmp_path, monkeypatch):
+        """--json flag should output structured JSON with checks array."""
+        import sqlite3
+
+        # Create a minimal omega.db with required tables
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.execute("CREATE VIRTUAL TABLE memories_fts USING fts5(content)")
+        conn.execute("CREATE TABLE memories_vec (rowid INTEGER PRIMARY KEY, embedding BLOB)")
+        conn.execute("INSERT INTO memories VALUES ('m1', 'test', '{}')")
+        conn.execute("INSERT INTO memories_fts VALUES ('test')")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.SETTINGS_JSON_PATH", tmp_path / "no-settings.json")
+
+        args = argparse.Namespace(json=True, client=None)
+        with pytest.raises(SystemExit):
+            cmd_doctor(args)
+
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert "checks" in parsed
+        assert isinstance(parsed["checks"], list)
+        assert len(parsed["checks"]) > 0
+        assert "errors" in parsed
+        assert "warnings" in parsed
+        # Each check should have status and message
+        for check in parsed["checks"]:
+            assert "status" in check
+            assert check["status"] in ("ok", "fail", "warn")
+            assert "message" in check
+
+    def test_json_no_rich_output(self, capsys, tmp_path, monkeypatch):
+        """JSON mode should NOT output any Rich formatting."""
+        import sqlite3
+
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.execute("CREATE VIRTUAL TABLE memories_fts USING fts5(content)")
+        conn.execute("CREATE TABLE memories_vec (rowid INTEGER PRIMARY KEY, embedding BLOB)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.SETTINGS_JSON_PATH", tmp_path / "no-settings.json")
+
+        args = argparse.Namespace(json=True, client=None)
+        with pytest.raises(SystemExit):
+            cmd_doctor(args)
+
+        out = capsys.readouterr().out
+        # Should be pure JSON - no Rich panels, no section headers
+        assert "OMEGA Doctor" not in out
+        assert "\u2500" not in out
+        # Should parse as valid JSON
+        parsed = json.loads(out)
+        assert parsed is not None
+
+    def test_json_via_env_var(self, capsys, tmp_path, monkeypatch):
+        """OMEGA_JSON=1 should trigger JSON output."""
+        import sqlite3
+
+        db_path = tmp_path / "omega.db"
+        conn = sqlite3.connect(str(db_path))
+        conn.execute("CREATE TABLE memories (id TEXT, content TEXT, metadata TEXT)")
+        conn.execute("CREATE VIRTUAL TABLE memories_fts USING fts5(content)")
+        conn.execute("CREATE TABLE memories_vec (rowid INTEGER PRIMARY KEY, embedding BLOB)")
+        conn.commit()
+        conn.close()
+
+        monkeypatch.setenv("OMEGA_JSON", "1")
+        monkeypatch.setattr("omega.cli.OMEGA_DIR", tmp_path)
+        monkeypatch.setattr("omega.cli.BGE_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.MINILM_MODEL_DIR", tmp_path / "no-model")
+        monkeypatch.setattr("omega.cli.SETTINGS_JSON_PATH", tmp_path / "no-settings.json")
+
+        args = argparse.Namespace(json=False, client=None)
+        with pytest.raises(SystemExit):
+            cmd_doctor(args)
+
+        out = capsys.readouterr().out
+        parsed = json.loads(out)
+        assert "checks" in parsed

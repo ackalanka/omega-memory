@@ -9,6 +9,7 @@ Triggered on Edit/Write/NotebookEdit/Bash. Provides:
 import json
 import os
 import re
+import sys
 import time
 import traceback
 from datetime import datetime
@@ -19,13 +20,9 @@ _MAX_LOG_BYTES = 5 * 1024 * 1024  # 5 MB cap
 
 
 def _check_milestone(name: str) -> bool:
-    """Return True if milestone not yet achieved (first time). Creates marker."""
-    marker = Path.home() / ".omega" / "milestones" / name
-    if marker.exists():
-        return False
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
-    return True
+    """DEPRECATED: Use omega.milestones._check_milestone instead."""
+    from omega.milestones import _check_milestone as _cm
+    return _cm(name)
 
 
 def _relative_time_from_iso(iso_str: str) -> str:
@@ -170,6 +167,26 @@ def _apply_confidence_boost(results: list) -> list:
         elif confidence == "low":
             r["relevance"] = score * 0.7
     return results
+
+
+def _check_nudge(edit_count: int, tool_calls: list) -> "Optional[str]":
+    """Return a nudge string if agent is missing a critical tool call, or None."""
+    normalized = set()
+    for t in tool_calls:
+        if t.startswith("mcp__omega-memory__"):
+            normalized.add(t.replace("mcp__omega-memory__", ""))
+        else:
+            normalized.add(t)
+
+    # Nudge 1: 10+ edits without omega_file_check
+    if edit_count >= 10 and "omega_file_check" not in normalized:
+        return "[OMEGA] Tip: You've made {n} edits without checking for file conflicts. Consider `omega_file_check(file_path=...)` before your next edit.".format(n=edit_count)
+
+    # Nudge 2: 30+ tool calls without omega_reflect
+    if len(tool_calls) >= 30 and "omega_reflect" not in normalized:
+        return "[OMEGA] Tip: Consider running `omega_reflect()` to check for contradictions or stale memories in your current work area."
+
+    return None
 
 
 def _surface_for_edit(file_path: str, session_id: str, project: str, count_surfacing: bool = True):
@@ -436,14 +453,12 @@ def _capture_error(tool_output: str, session_id: str, project: str):
             session_id=session_id,
             project=project,
         )
-        if result and ("Memory Captured" in result or "Memory Evolved" in result):
+        if result and ("Stored" in result or "Evolved" in result):
             first_line = error_summary.split('\n')[0][:80]
             if "Evolved" in result:
-                evo_match = re.search(r"Evolution #(\d+)", result)
-                evo_num = evo_match.group(1) if evo_match else "?"
-                print(f"[OMEGA] Memory evolved: error pattern updated (evolution #{evo_num}) — {first_line}")
+                print(f"[OMEGA] Evolved error pattern — {first_line}")
             else:
-                print(f"[OMEGA] Captured: error — {first_line}")
+                print(f"[OMEGA] Captured error — {first_line}")
     except ImportError:
         pass
     except Exception as e:
@@ -507,12 +522,60 @@ def _track_git_commit(tool_input: str, tool_output: str, session_id: str, projec
         _log_hook_error("track_git_commit", e)
 
 
+def _check_protocol_reminder(session_id: str):
+    """Remind agent to call omega_protocol() if not yet called this session.
+
+    Uses a marker file per session. The marker is created by the MCP handler
+    when omega_protocol() is called. If absent after a few tool uses, we nudge.
+    """
+    if not session_id:
+        return
+    try:
+        omega_dir = Path.home() / ".omega"
+        protocol_marker = omega_dir / f"session-{session_id}.protocol"
+        if protocol_marker.exists():
+            return  # Already called this session
+
+        # Count tool uses via surfacing counter
+        surfaced_marker = omega_dir / f"session-{session_id}.surfaced"
+        tool_uses = 0
+        if surfaced_marker.exists():
+            tool_uses = surfaced_marker.stat().st_size
+
+        # Only remind after 3+ tool uses (give agent time to call it naturally)
+        if tool_uses >= 3:
+            print("\n[PROTOCOL] Reminder: call `omega_protocol()` to load your coordination playbook. It was not called this session.")
+            # Create marker so we only remind once
+            protocol_marker.parent.mkdir(parents=True, exist_ok=True)
+            protocol_marker.write_text("reminded")
+    except Exception:
+        pass
+
+
+def _get_session_tool_names_fast(session_id: str) -> list:
+    """Fast read of tool names from coord_audit for this session."""
+    try:
+        import sqlite3
+        db = sqlite3.connect(os.path.expanduser("~/.omega/omega.db"), timeout=1)
+        rows = db.execute(
+            "SELECT tool_name FROM coord_audit WHERE session_id = ? ORDER BY call_index",
+            (session_id,),
+        ).fetchall()
+        db.close()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
+
+
 def main():
     tool_name = os.environ.get("TOOL_NAME", "")
     tool_input = os.environ.get("TOOL_INPUT", "{}")
     tool_output = os.environ.get("TOOL_OUTPUT", "")
     session_id = os.environ.get("SESSION_ID", "")
     project = os.environ.get("PROJECT_DIR", os.getcwd())
+
+    # Check if agent needs a protocol reminder
+    _check_protocol_reminder(session_id)
 
     # Surface memories on file edits
     if tool_name in ("Edit", "Write", "NotebookEdit"):
@@ -536,6 +599,19 @@ def main():
         file_path = input_data.get("file_path", "")
         if file_path:
             _surface_for_edit(file_path, session_id, project, count_surfacing=False)
+
+    # Mid-session utilization nudge (once per threshold crossing)
+    try:
+        nudge_marker = Path.home() / ".omega" / f"session-{session_id}.nudged"
+        if session_id and not nudge_marker.exists():
+            tool_calls_list = _get_session_tool_names_fast(session_id)
+            edit_count = sum(1 for t in tool_calls_list if t in ("Edit", "Write", "NotebookEdit"))
+            nudge = _check_nudge(edit_count, tool_calls_list)
+            if nudge:
+                print(nudge, file=sys.stderr)
+                nudge_marker.touch()  # Only nudge once per session
+    except Exception:
+        pass
 
     # Auto-capture errors from Bash failures + track git commits
     if tool_name == "Bash" and tool_output:

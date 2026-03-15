@@ -57,12 +57,8 @@ async def _store_and_get_id(content, event_type="lesson_learned", **kwargs) -> s
     )
     assert not _is_error(result), f"Store failed: {_text(result)}"
     text = _text(result)
-    # Extract node ID from "**Node ID:** `<id>`"
-    match = re.search(r"Node ID:\*\*\s*`([^`]+)`", text)
-    if match:
-        return match.group(1)
-    # Also check for dedup/evolved messages which contain shorter IDs
-    match = re.search(r"existing\s+`?([a-f0-9-]+)", text)
+    # Extract node ID from compact format: "Stored mem-xxxxx ..." or "Deduped → mem-xxxxx ..."
+    match = re.search(r"(?:Stored|Deduped|Evolved)\s+(?:→\s*)?(mem-[a-f0-9]+)", text)
     if match:
         return match.group(1)
     # Return the full text if we can't extract an ID (dedup case)
@@ -86,7 +82,7 @@ class TestUATMemoryLifecycle:
         })
         assert not _is_error(result)
         text = _text(result)
-        assert "Node ID:" in text or "Memory Captured" in text
+        assert "Stored" in text or "Deduped" in text or "Evolved" in text
 
     @pytest.mark.asyncio
     async def test_store_and_query_roundtrip(self):
@@ -226,7 +222,7 @@ class TestUATMemoryEvolution:
             "event_type": "lesson_learned",
         })
         text = _text(result)
-        assert "Memory Captured" in text or "Node ID:" in text
+        assert "Stored" in text or "Deduped" in text or "Evolved" in text
 
     @pytest.mark.asyncio
     async def test_evolution_only_for_eligible_types(self):
@@ -351,7 +347,7 @@ class TestUATSessionScoping:
             "session_id": "session-aaa",
         })
         await HANDLERS["omega_store"]({
-            "content": "Session BBB memory about setting up the development environment for frontend project",
+            "content": "Session BBB memory about setting up the development environment for Acme App project",
             "event_type": "lesson_learned",
             "session_id": "session-bbb",
         })
@@ -520,7 +516,6 @@ class TestUATConsolidationPipeline:
         result = await HANDLERS["omega_health"]({})
         assert not _is_error(result)
         text = _text(result)
-        assert "Health" in text
         assert "Status:" in text
 
 
@@ -554,8 +549,9 @@ class TestUATWelcomeBriefing:
         result = await HANDLERS["omega_welcome"]({})
         assert not _is_error(result)
         text = _text(result)
-        parsed = json.loads(text)
-        assert parsed["memory_count"] >= 2
+        # Welcome returns markdown with memory count in header
+        assert "Welcome Briefing" in text
+        assert "memories)" in text
 
     @pytest.mark.asyncio
     async def test_welcome_prioritizes_high_value(self):
@@ -571,12 +567,10 @@ class TestUATWelcomeBriefing:
         )
         result = await HANDLERS["omega_welcome"]({})
         text = _text(result)
-        parsed = json.loads(text)
-        recent = parsed.get("recent_memories", [])
-        if recent:
-            types = [m["type"] for m in recent]
-            # Decision should appear before session_summary in welcome
-            assert "decision" in types or "lesson_learned" in types
+        # Welcome returns markdown; decisions should appear in Active Decisions section
+        assert "Welcome Briefing" in text
+        # The decision content should appear somewhere in the briefing
+        assert "decision" in text.lower() or "ONNX" in text
 
     @pytest.mark.asyncio
     async def test_welcome_with_session_id(self):

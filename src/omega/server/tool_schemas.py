@@ -1,15 +1,9 @@
-"""OMEGA MCP Tool Schemas -- 14 tools for memory management.
+"""OMEGA MCP Tool Schemas -- 15 tools for memory management.
 
-Consolidated into 14 action-discriminated composites.
+Consolidated into 15 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
 omega_briefing and omega_habits remain as backward-compat aliases in handlers.
 omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
-
-Condensed Mode (CodeMode-inspired):
-  When OMEGA_CONDENSED=1, only 5 tools are exposed: 3 standalone essentials
-  (omega_welcome, omega_protocol, omega_store) + 2 meta-tools (omega_tools,
-  omega_call). All other tools are accessible via omega_call(tool=..., args=...).
-  This reduces schema token overhead by ~88%.
 """
 
 TOOL_SCHEMAS = [
@@ -41,6 +35,19 @@ TOOL_SCHEMAS = [
                 "agent_type": {
                     "type": "string",
                     "description": "Agent type for sub-agent memory scoping (e.g., 'code-reviewer', 'test-runner').",
+                },
+                "derived_from": {
+                    "type": "string",
+                    "description": "Node ID of the parent memory this was derived from. Creates a 'derived_from' edge for lineage tracking.",
+                },
+                "source_uri": {
+                    "type": "string",
+                    "description": "External source reference (e.g., Slack URL, Google Doc ID, git commit SHA, X post URL). Enables provenance tracking.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Memory lifecycle status. Default 'active'. Use 'speculative' for unverified claims, 'archived' for intentionally preserved but inactive.",
                 },
                 "items": {"type": "array", "items": {"type": "object"}, "description": "Batch mode: list of {content, event_type, metadata} dicts. When provided, stores all items. Other top-level params ignored."},
             },
@@ -105,6 +112,11 @@ TOOL_SCHEMAS = [
                 "valid_at": {
                     "type": "string",
                     "description": "ISO datetime. Return only memories that were valid at this point in time. Enables temporal queries like 'what did we know before session X?'",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Filter by memory lifecycle status. Default: returns all statuses. Use 'active' to exclude superseded/archived.",
                 },
             },
         },
@@ -211,11 +223,11 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_maintain",
-        "description": "System housekeeping and constraint management. Use 'health' to check database size and integrity, 'consolidate' to prune stale memories, 'compact' to merge near-duplicates, 'backup'/'restore' for data safety, 'clear_session' to purge a session's data, 'synthesize_insights' to generate system insights, 'backfill_embeddings' to fill missing vectors, 'list_constraints'/'check_constraint'/'save_constraints' to manage file constraint rules.",
+        "description": "System housekeeping and constraint management. Use 'health' to check database size and integrity, 'consolidate' to prune stale memories, 'compact' to merge near-duplicates, 'discover_connections' to actively find and link related memories (generates cross-type insights), 'backup'/'restore' for data safety, 'clear_session' to purge a session's data, 'synthesize_insights' to generate system insights, 'backfill_embeddings' to fill missing vectors, 'list_constraints'/'check_constraint'/'save_constraints' to manage file constraint rules.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["health", "consolidate", "compact", "backup", "restore", "clear_session", "synthesize_insights", "backfill_embeddings", "list_constraints", "check_constraint", "save_constraints"], "description": "Maintenance operation"},
+                "action": {"type": "string", "enum": ["health", "consolidate", "compact", "discover_connections", "backup", "restore", "clear_session", "synthesize_insights", "backfill_embeddings", "list_constraints", "check_constraint", "save_constraints"], "description": "Maintenance operation"},
                 "warn_mb": {"type": "number", "description": "Warning threshold MB (health, default 350)", "default": 350},
                 "critical_mb": {"type": "number", "description": "Critical threshold MB (health, default 800)", "default": 800},
                 "max_nodes": {"type": "integer", "description": "Max expected nodes (health, default 10000)", "default": 10000},
@@ -224,7 +236,8 @@ TOOL_SCHEMAS = [
                 "event_type": {"type": "string", "description": "Type to compact (compact, default lesson_learned)", "default": "lesson_learned"},
                 "similarity_threshold": {"type": "number", "description": "Jaccard similarity 0.0-1.0 (compact, default 0.6)", "default": 0.6},
                 "min_cluster_size": {"type": "integer", "description": "Min cluster size (compact, default 3)", "default": 3},
-                "dry_run": {"type": "boolean", "description": "Preview only (compact, default false)", "default": False},
+                "dry_run": {"type": "boolean", "description": "Preview only (compact/discover_connections, default false)", "default": False},
+                "lookback_hours": {"type": "integer", "description": "Hours to look back for discover_connections (default 24)", "default": 24},
                 "filepath": {"type": "string", "description": "File path (backup/restore)"},
                 "clear_existing": {"type": "boolean", "description": "Clear before restore (default true)", "default": True},
                 "session_id": {"type": "string", "description": "Session to purge (clear_session)"},
@@ -237,14 +250,14 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_stats",
-        "description": "View analytics and behavioral insights: memory breakdown by type, per-session statistics, weekly digest, forgetting audit log, deduplication stats, access rate trends, milestones, unified diagnostic report, and behavioral patterns (habits_list, habits_analyze, habits_profile, habits_confirm, habits_deny, habits_recommendations).",
+        "description": "View analytics and behavioral insights: memory breakdown by type, per-session statistics, weekly digest, forgetting audit log, deduplication stats, access rate trends, milestones, unified diagnostic report, tool utilization monitoring, and behavioral patterns (habits_list, habits_analyze, habits_profile, habits_confirm, habits_deny, habits_recommendations).",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["types", "sessions", "digest", "forgetting_log", "dedup", "milestones", "access_rate", "diagnostic", "habits_list", "habits_confirm", "habits_deny", "habits_analyze", "habits_profile", "habits_recommendations", "graph_stats"],
-                    "description": "Which stats/insights to retrieve. 'diagnostic' returns a unified health/value report. habits_* actions manage behavioral patterns.",
+                    "enum": ["types", "sessions", "digest", "forgetting_log", "dedup", "milestones", "access_rate", "diagnostic", "habits_list", "habits_confirm", "habits_deny", "habits_analyze", "habits_profile", "habits_recommendations", "graph_stats", "utilization"],
+                    "description": "Which stats/insights to retrieve. 'diagnostic' returns a unified health/value report. 'utilization' shows tool usage vs defined tools. habits_* actions manage behavioral patterns.",
                 },
                 "days": {"type": "integer", "description": "Days for digest (default 7)", "default": 7},
                 "limit": {"type": "integer", "description": "Max entries for forgetting_log (default 50)", "default": 50},
@@ -360,86 +373,40 @@ TOOL_SCHEMAS = [
             "required": ["prompt"],
         },
     },
-]
-
-
-# ---------------------------------------------------------------------------
-# Condensed Mode (CodeMode-inspired)
-# ---------------------------------------------------------------------------
-
-# Tools that remain as standalone even in condensed mode.
-# These are called every session and benefit from zero-overhead direct invocation.
-STANDALONE_TOOLS = ["omega_welcome", "omega_protocol", "omega_store"]
-
-# Category mapping for tool discovery via omega_tools.
-TOOL_CATEGORIES = {
-    "omega_store": "memory",
-    "omega_query": "query",
-    "omega_welcome": "session",
-    "omega_protocol": "session",
-    "omega_checkpoint": "memory",
-    "omega_resume_task": "memory",
-    "omega_memory": "memory",
-    "omega_profile": "session",
-    "omega_remind": "operations",
-    "omega_maintain": "maintenance",
-    "omega_stats": "maintenance",
-    "omega_reflect": "intelligence",
-    "omega_consult_gpt": "intelligence",
-    "omega_consult_claude": "intelligence",
-    # Pro tools (added dynamically if present)
-    "omega_review": "intelligence",
-    "omega_oracle_record": "oracle",
-    "omega_oracle_resolve": "oracle",
-    "omega_oracle_analyze": "oracle",
-    "omega_oracle_status": "oracle",
-}
-
-CONDENSED_TOOL_SCHEMAS = [
     {
-        "name": "omega_tools",
-        "description": "List available OMEGA tools or get the full schema for a specific tool. Call with no args to see all tool names and descriptions. Call with tool='name' to get its full input schema so you know what arguments to pass to omega_call.",
+        "name": "omega_review",
+        "description": "Review a code diff with multi-agent specialist panel. Uses OMEGA memory for codebase context, team conventions, and past incident awareness. Returns findings sorted by severity with confidence scores.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "tool": {
+                "diff": {
                     "type": "string",
-                    "description": "Tool name to get full schema for. Omit to list all tools.",
+                    "description": "Unified diff text to review (from git diff, PR, or raw text)",
                 },
-                "category": {
+                "repo": {
                     "type": "string",
-                    "enum": ["memory", "query", "session", "maintenance", "intelligence", "oracle", "operations", "all"],
-                    "description": "Filter by category. Default: all.",
+                    "description": "Repository name for context lookup",
                 },
+                "mode": {
+                    "type": "string",
+                    "enum": ["strict", "normal", "verbose"],
+                    "description": "Filtering mode: strict (critical+major only), normal (default, >=70% confidence), verbose (all findings)",
+                    "default": "normal",
+                },
+                "agents": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Agent types to run: correctness, security, performance, consistency, blast_radius. Default: all.",
+                },
+                "summarize_only": {
+                    "type": "boolean",
+                    "description": "If true, return only a fast deterministic summary (no LLM review). Good for quick risk assessment.",
+                    "default": False,
+                },
+                "session_id": {"type": "string"},
+                "entity_id": {"type": "string"},
             },
-        },
-    },
-    {
-        "name": "omega_call",
-        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Example: omega_call(tool='omega_query', args={'query': 'auth decisions', 'mode': 'semantic'})",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "tool": {
-                    "type": "string",
-                    "description": "Tool name to execute, e.g. 'omega_query', 'omega_checkpoint', 'omega_memory'",
-                },
-                "args": {
-                    "type": "object",
-                    "description": "Arguments to pass to the tool. Use omega_tools(tool='name') to see accepted parameters.",
-                },
-            },
-            "required": ["tool"],
+            "required": ["diff"],
         },
     },
 ]
-
-
-def get_condensed_schemas(all_schemas: list[dict]) -> list[dict]:
-    """Return condensed tool set: standalone tools + meta-tools.
-
-    In condensed mode, only essential high-frequency tools are exposed directly.
-    All other tools are accessible via omega_call/omega_tools meta-tools.
-    """
-    standalone = [s for s in all_schemas if s["name"] in STANDALONE_TOOLS]
-    return standalone + CONDENSED_TOOL_SCHEMAS

@@ -264,3 +264,155 @@ class TestDoctorEnhancements:
         assert hasattr(cli, 'cmd_backup')
         assert hasattr(cli, 'cmd_logs')
         assert hasattr(cli, 'cmd_validate')
+
+
+class TestWeeklyDigest:
+    """Test the weekly digest handler end-to-end."""
+
+    def test_digest_empty_store(self, store):
+        """Weekly digest works on empty store."""
+        from omega.bridge import get_weekly_digest
+        with patch("omega.bridge._get_store", return_value=store):
+            result = get_weekly_digest(days=7)
+        assert result["period_days"] == 7
+        assert result["total_memories"] == 0
+        assert result["period_new"] == 0
+        assert result["session_count"] == 0
+
+    def test_digest_with_data(self, store):
+        """Weekly digest counts recent memories correctly."""
+        store.store(content="Test memory one", metadata={"event_type": "decision"})
+        store.store(content="Test memory two", metadata={"event_type": "lesson_learned"})
+        store.store(content="Test memory three", metadata={"event_type": "decision"},
+                    session_id="sess-abc")
+
+        from omega.bridge import get_weekly_digest
+        with patch("omega.bridge._get_store", return_value=store):
+            result = get_weekly_digest(days=7)
+        assert result["total_memories"] == 3
+        assert result["period_new"] == 3
+        assert "decision" in result["type_breakdown"]
+        assert result["type_breakdown"]["decision"] == 2
+
+    def test_digest_handler(self, store):
+        """MCP handler returns formatted response."""
+        import asyncio
+        from omega.server.handlers import handle_omega_weekly_digest
+        store.store(content="Testing the digest handler", metadata={"event_type": "memory"})
+        with patch("omega.bridge._get_store", return_value=store):
+            result = asyncio.run(
+                handle_omega_weekly_digest({"days": 7})
+            )
+        assert not result.get("isError")
+
+
+class TestTypeStats:
+    """Test type_stats handler."""
+
+    def test_type_stats_empty(self, store):
+        """Type stats on empty store."""
+        from omega.bridge import type_stats
+        with patch("omega.bridge._get_store", return_value=store):
+            stats = type_stats()
+        assert stats == {} or isinstance(stats, dict)
+
+    def test_type_stats_with_data(self, store):
+        """Type stats counts by event type."""
+        store.store(content="Decision one", metadata={"event_type": "decision"})
+        store.store(content="Lesson one", metadata={"event_type": "lesson_learned"})
+        store.store(content="Decision two", metadata={"event_type": "decision"})
+
+        from omega.bridge import type_stats
+        with patch("omega.bridge._get_store", return_value=store):
+            stats = type_stats()
+        assert stats.get("decision") == 2
+        assert stats.get("lesson_learned") == 1
+
+    def test_type_stats_handler(self, store):
+        """MCP handler formats output correctly."""
+        import asyncio
+        from omega.server.handlers import handle_omega_type_stats
+        store.store(content="Test mem", metadata={"event_type": "decision"})
+        with patch("omega.bridge._get_store", return_value=store):
+            result = asyncio.run(
+                handle_omega_type_stats({})
+            )
+        assert not result.get("isError")
+
+
+class TestSessionStats:
+    """Test session_stats handler."""
+
+    def test_session_stats_with_data(self, store):
+        """Session stats groups by session_id."""
+        store.store(content="Memory A", session_id="sess-1")
+        store.store(content="Memory B", session_id="sess-1")
+        store.store(content="Memory C", session_id="sess-2")
+
+        from omega.bridge import session_stats
+        with patch("omega.bridge._get_store", return_value=store):
+            stats = session_stats()
+        assert stats.get("sess-1") == 2
+        assert stats.get("sess-2") == 1
+
+    def test_session_stats_handler(self, store):
+        """MCP handler returns formatted response."""
+        import asyncio
+        from omega.server.handlers import handle_omega_session_stats
+        store.store(content="Test", session_id="sess-x")
+        with patch("omega.bridge._get_store", return_value=store):
+            result = asyncio.run(
+                handle_omega_session_stats({})
+            )
+        assert not result.get("isError")
+
+
+class TestForgettingLog:
+    """Test forgetting_log handler."""
+
+    def test_forgetting_log_empty(self, store):
+        """Forgetting log on fresh store returns header."""
+        from omega.bridge import forgetting_log
+        with patch("omega.bridge._get_store", return_value=store):
+            result = forgetting_log(limit=10)
+        assert "Forgetting Log" in result
+
+    def test_forgetting_log_handler(self, store):
+        """MCP handler returns without error."""
+        import asyncio
+        from omega.server.handlers import handle_omega_forgetting_log
+        with patch("omega.bridge._get_store", return_value=store):
+            result = asyncio.run(
+                handle_omega_forgetting_log({"limit": 10})
+            )
+        assert not result.get("isError")
+
+
+class TestPeriodStats:
+    """Test the store-level get_period_stats method."""
+
+    def test_period_stats_basic(self, store):
+        """get_period_stats returns correct structure."""
+        store.store(content="A fact", metadata={"event_type": "decision"}, session_id="s1")
+
+        from datetime import datetime, timedelta, timezone
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()
+        stats = store.get_period_stats(cutoff=cutoff)
+
+        assert stats["period_count"] >= 1
+        assert "decision" in stats["type_breakdown"]
+        assert stats["session_count"] >= 1
+        assert len(stats["content_samples"]) >= 1
+        assert stats["prev_period_count"] == 0
+
+    def test_period_stats_with_prev(self, store):
+        """get_period_stats tracks previous period."""
+        from datetime import datetime, timedelta, timezone
+        now = datetime.now(timezone.utc)
+        cutoff = (now - timedelta(days=7)).isoformat()
+        prev_cutoff = (now - timedelta(days=14)).isoformat()
+
+        store.store(content="Recent memory", metadata={"event_type": "memory"})
+        stats = store.get_period_stats(cutoff=cutoff, prev_cutoff=prev_cutoff)
+
+        assert isinstance(stats["prev_period_count"], int)

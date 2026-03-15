@@ -7,7 +7,7 @@ Tests:
 - SQLiteStore.get_last_capture_time() public method
 - SQLiteStore.get_session_event_counts() public method
 - Surfacing relevance threshold (>=30%)
-- Capture confirmations (Memory Captured, Evolved, Deduped)
+- Capture confirmations (Stored, Evolved, Deduped)
 - Session activity report formatting (plurals, labels)
 - Auto-feedback reads and cleans .surfaced.json
 """
@@ -66,7 +66,7 @@ class TestHumanTTL:
     def test_days(self):
         from omega.bridge import _human_ttl
         assert _human_ttl(86400) == "1d"
-        assert _human_ttl(1209600) == "14d"
+        assert _human_ttl(7776000) == "90d"
         assert _human_ttl(604800) == "7d"
 
     def test_auto_capture_uses_human_ttl(self, tmp_omega_dir):
@@ -79,6 +79,7 @@ class TestHumanTTL:
             session_id="test-session",
         )
         assert "permanent" in result
+        assert "1209600" not in result
 
 
 # ============================================================================
@@ -315,7 +316,7 @@ class TestCaptureConfirmations:
             event_type="error_pattern",
             session_id="test-s",
         )
-        assert "Memory Captured" in result
+        assert "Stored" in result or "Deduped" in result or "Evolved" in result
 
     def test_dedup_returns_deduplicated(self, tmp_omega_dir):
         from omega.bridge import auto_capture
@@ -332,8 +333,9 @@ class TestCaptureConfirmations:
             event_type="decision",
             session_id="test-s",
         )
-        # decision TTL is now permanent (None)
+        # decision TTL is PERMANENT (never expires)
         assert "permanent" in result
+        assert "1209600" not in result
 
 
 # ============================================================================

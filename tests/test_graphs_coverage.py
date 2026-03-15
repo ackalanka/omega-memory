@@ -20,6 +20,7 @@ from omega.embedding import (
     preload_embedding_model,
     _has_embedding_backend,
     get_active_backend,
+    has_sentence_transformers,
 )
 
 
@@ -171,15 +172,18 @@ class TestCheckOnnxRuntime:
 
 
 # ---------------------------------------------------------------------------
-# 5. has_sentence_transformers — stub in community edition
+# 5. has_sentence_transformers — stub (always False)
 # ---------------------------------------------------------------------------
 
 class TestHasSentenceTransformers:
-    """Test sentence_transformers availability (stub returns False)."""
+    """Test that has_sentence_transformers() always returns False (PyTorch gated off)."""
 
-    def test_returns_false(self):
-        from omega.embedding import has_sentence_transformers
+    def test_always_returns_false(self):
         assert has_sentence_transformers() is False
+
+    def test_returns_bool(self):
+        result = has_sentence_transformers()
+        assert isinstance(result, bool)
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +244,7 @@ class TestGenerateEmbedding:
     def test_hash_fallback_when_no_backend(self, monkeypatch):
         """With skip flag set, should fall back to hash embedding."""
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -251,6 +256,7 @@ class TestGenerateEmbedding:
 
     def test_returns_list_of_floats(self, monkeypatch):
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -261,6 +267,7 @@ class TestGenerateEmbedding:
     def test_cache_hit(self, monkeypatch):
         """Cache should return identical results for repeated calls."""
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -270,6 +277,7 @@ class TestGenerateEmbedding:
 
     def test_empty_string_input(self, monkeypatch):
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -291,6 +299,7 @@ class TestGenerateEmbeddingsBatch:
     def test_hash_fallback_batch(self, monkeypatch):
         """With no backend, batch should produce hash embeddings for each text."""
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -306,6 +315,7 @@ class TestGenerateEmbeddingsBatch:
     def test_batch_matches_individual_hash(self, monkeypatch):
         """Batch hash fallback should match individual hash fallback outputs."""
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -316,6 +326,7 @@ class TestGenerateEmbeddingsBatch:
 
     def test_single_item_batch(self, monkeypatch):
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -393,6 +404,7 @@ class TestPreloadEmbeddingModel:
 
     def test_returns_false_when_no_backend(self, monkeypatch):
         """If neither ONNX nor sentence-transformers available, return False."""
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", False)
 
@@ -402,6 +414,7 @@ class TestPreloadEmbeddingModel:
     def test_returns_false_when_skip_set(self, monkeypatch):
         """With OMEGA_SKIP_EMBEDDINGS=1, model load returns None, so preload returns False."""
         monkeypatch.setenv("OMEGA_SKIP_EMBEDDINGS", "1")
+        monkeypatch.setenv("OMEGA_EMBEDDING_DAEMON", "0")
         # Pretend ONNX is available so it enters _get_embedding_model
         monkeypatch.setattr(graphs, "_ONNX_CHECKED", True)
         monkeypatch.setattr(graphs, "_ONNX_AVAILABLE", True)
@@ -447,8 +460,7 @@ class TestGetEmbeddingInfo:
         info = get_embedding_info()
         expected_keys = {
             "backend", "model", "model_loaded", "onnx_available",
-            "onnx_model_dir",
-            "dimension", "cache_size", "lazy_loading",
+            "onnx_model_dir", "dimension", "cache_size", "lazy_loading",
         }
         assert set(info.keys()) == expected_keys
 
@@ -513,3 +525,64 @@ class TestAllExports:
     def test_all_entries_are_importable(self):
         for name in graphs.__all__:
             assert hasattr(graphs, name), f"{name} in __all__ but not defined"
+
+
+# ---------------------------------------------------------------------------
+# Regression: daemon→ONNX fallback dispatch (stale _EMBEDDING_BACKEND)
+# ---------------------------------------------------------------------------
+
+class TestDaemonToOnnxFallback:
+    """Reproduce bug where _EMBEDDING_BACKEND='daemon' causes ONNX model
+    tuple to be dispatched through .encode() path."""
+
+    def setup_method(self):
+        reset_embedding_state()
+
+    def teardown_method(self):
+        reset_embedding_state()
+
+    def test_single_embed_after_daemon_sets_backend(self):
+        """When _EMBEDDING_BACKEND is 'daemon' but model is ONNX tuple,
+        generate_embedding should still use ONNX path, not .encode()."""
+        mock_tokenizer = object()
+        mock_session = object()
+        onnx_model = (mock_tokenizer, mock_session)
+
+        # Simulate: daemon was used, then fell back to in-process ONNX
+        graphs._EMBEDDING_MODEL = onnx_model
+        graphs._EMBEDDING_BACKEND = "daemon"  # stale!
+
+        import unittest.mock as mock
+
+        with mock.patch("omega.embedding._onnx_encode") as mock_encode, \
+             mock.patch("omega.embedding._maybe_unload_model"), \
+             mock.patch("omega.embedding_client.get_client", return_value=None):
+            import numpy as np
+            mock_encode.return_value = np.array([[0.1] * 384])
+
+            result = generate_embedding("test text")
+            mock_encode.assert_called_once()
+            assert len(result) == 384
+            assert graphs._EMBEDDING_BACKEND == "onnx"
+
+    def test_batch_embed_after_daemon_sets_backend(self):
+        """Same bug in batch path."""
+        mock_tokenizer = object()
+        mock_session = type("MockSession", (), {
+            "get_providers": lambda self: ["CPUExecutionProvider"],
+        })()
+        onnx_model = (mock_tokenizer, mock_session)
+
+        graphs._EMBEDDING_MODEL = onnx_model
+        graphs._EMBEDDING_BACKEND = "daemon"  # stale!
+
+        import unittest.mock as mock
+
+        with mock.patch("omega.embedding._onnx_encode") as mock_encode, \
+             mock.patch("omega.embedding_client.get_client", return_value=None):
+            import numpy as np
+            mock_encode.return_value = np.array([[0.1] * 384, [0.2] * 384])
+
+            result = generate_embeddings_batch(["text1", "text2"])
+            assert mock_encode.called
+            assert graphs._EMBEDDING_BACKEND == "onnx"

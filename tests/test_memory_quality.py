@@ -77,7 +77,7 @@ class TestContentBlocklist:
             event_type="decision",
         )
         assert "Blocked" not in result
-        assert "Captured" in result or "Evolved" in result or "Deduped" in result
+        assert "Stored" in result or "Evolved" in result or "Deduped" in result
 
 
 class TestMinLengthGate:
@@ -141,7 +141,7 @@ class TestDedupThresholds:
             content="Decided to use PostgreSQL with connection pooling via pgbouncer for the database layer in the production environment for improved performance and reliability",
             event_type="decision",
         )
-        assert "Captured" in r1
+        assert "Stored" in r1
 
         # Very similar content — only 1 word different (Jaccard ~0.88)
         r2 = auto_capture(
@@ -156,13 +156,13 @@ class TestDedupThresholds:
             content="Decided to use PostgreSQL with connection pooling for the database layer in production environment",
             event_type="decision",
         )
-        assert "Captured" in r1
+        assert "Stored" in r1
 
         r2 = auto_capture(
             content="Decided to switch from REST API to GraphQL for the frontend communication layer entirely",
             event_type="decision",
         )
-        assert "Captured" in r2 or "Evolved" in r2
+        assert "Stored" in r2 or "Evolved" in r2
 
 
 class TestErrorBurstDetection:
@@ -277,7 +277,7 @@ class TestBlocklistScoping:
             event_type="lesson_learned",
         )
         assert "Blocked" not in result
-        assert "Captured" in result or "Evolved" in result
+        assert "Stored" in result or "Evolved" in result
 
     def test_direct_api_with_stderr_not_blocked(self, bridge_env):
         """Direct API call mentioning stderr should pass."""

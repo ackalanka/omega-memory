@@ -1,5 +1,7 @@
 """Tests for agent_type scoping — sub-agent memory isolation."""
 
+import pytest
+
 from omega.sqlite_store import SQLiteStore, SCHEMA_VERSION
 
 
@@ -12,9 +14,9 @@ class TestAgentTypeSchema:
     """Test schema v4 migration and agent_type column."""
 
     def test_schema_version_is_4(self, store):
-        assert SCHEMA_VERSION == 5
+        assert SCHEMA_VERSION == 14
         row = store._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-        assert row[0] == 5
+        assert row[0] == 14
 
     def test_agent_type_column_exists(self, store):
         """The memories table should have an agent_type column."""
@@ -66,7 +68,7 @@ class TestAgentTypeSchema:
         assert "agent_type" in col_names
 
         row = s._conn.execute("SELECT version FROM schema_version LIMIT 1").fetchone()
-        assert row[0] == 5  # v3 -> v4 (agent_type) + v4 -> v5 (canonical_hash)
+        assert row[0] == 14  # v3 -> ... -> v10 -> v11
         s.close()
 
 
@@ -198,6 +200,7 @@ class TestAgentTypeQuery:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("_reset_bridge")
 class TestAgentTypeBridge:
     """Test bridge layer passes agent_type through."""
 
@@ -210,7 +213,7 @@ class TestAgentTypeBridge:
             event_type="lesson_learned",
             agent_type="code-reviewer",
         )
-        assert "Memory Captured" in result or "Evolved" in result or "Blocked" not in result
+        assert "Stored" in result or "Evolved" in result or "Blocked" not in result
 
         db = _get_store()
         # Find the stored memory
@@ -256,7 +259,7 @@ class TestAgentTypeBridge:
 
         # Query scoped to code-reviewer
         result = query(query_text="validate", agent_type="code-reviewer")
-        assert "Query Results" in result
+        assert "Results:" in result
 
 
 # ============================================================================
@@ -264,6 +267,7 @@ class TestAgentTypeBridge:
 # ============================================================================
 
 
+@pytest.mark.usefixtures("_reset_bridge")
 class TestAgentTypeLessons:
     """Test lessons filtering by agent_type."""
 

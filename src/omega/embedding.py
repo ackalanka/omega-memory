@@ -17,6 +17,7 @@ from typing import Dict, List, Optional, Any
 import hashlib
 import logging
 import math
+import os
 
 __all__ = [
     "generate_embedding",
@@ -48,7 +49,8 @@ _LOAD_ATTEMPTED = False  # Circuit breaker: don't retry after first failure
 _EMBEDDING_MODEL_NAME = "bge-small-en-v1.5"
 _EMBEDDING_MODEL_VERSION = "v1.5"
 _EMBEDDING_CACHE: OrderedDict = OrderedDict()
-_EMBEDDING_CACHE_MAX = 512
+_CACHE_MAX = int(os.environ.get("OMEGA_EMBEDDING_CACHE_MAX", "512"))
+_EMBEDDING_CACHE_MAX = _CACHE_MAX
 
 # Idle-timeout model unloading — save RAM when not actively embedding
 import time as _time_module
@@ -80,6 +82,19 @@ def get_embedding_model_info() -> Dict[str, Any]:
         "model_loaded": _EMBEDDING_MODEL is not None,
         "backend": _EMBEDDING_BACKEND,
     }
+
+
+def _resolve_model_name(model_name: Optional[str]) -> str:
+    """Return the effective model name, falling back to the current global model.
+
+    Args:
+        model_name: Explicit model identifier (e.g. ``"nvidia/NV-Embed-v2"``),
+            or ``None`` to use the currently-loaded model (``_EMBEDDING_MODEL_NAME``).
+
+    Returns:
+        The resolved model name string.
+    """
+    return model_name if model_name is not None else _EMBEDDING_MODEL_NAME
 
 
 def reset_embedding_state():
@@ -231,13 +246,27 @@ def _get_embedding_model():
 
     _LOAD_ATTEMPTED = True
 
-    import os
-
     os.environ.setdefault("TQDM_DISABLE", "1")
 
     if os.environ.get("OMEGA_SKIP_EMBEDDINGS") == "1":
         logger.info("Skipping embedding model load (OMEGA_SKIP_EMBEDDINGS=1)")
         return None
+
+    # Fail-fast: if no model directory exists, skip retries entirely
+    if _check_onnx_runtime():
+        from pathlib import Path as _Path
+        _primary = _Path(os.path.expanduser(_ONNX_DEFAULT_DIR))
+        _fallback = _Path(os.path.expanduser(_ONNX_FALLBACK_DIR))
+        _env_dir = os.environ.get("OMEGA_ONNX_MODEL_DIR")
+        _no_model_dir = (
+            not _primary.exists()
+            and not _fallback.exists()
+            and (_env_dir is None or not _Path(_env_dir).exists())
+        )
+        if _no_model_dir and os.environ.get("OMEGA_ALLOW_PYTORCH_FALLBACK") != "1":
+            logger.info("No ONNX model directory found; skipping retries")
+            _get_embedding_model._attempt_count = 3  # prevent further retries
+            return None
 
     # Try ONNX Runtime first
     if _check_onnx_runtime():
@@ -318,7 +347,24 @@ def _get_embedding_model():
 
 
 def preload_embedding_model() -> bool:
-    """Preload the embedding model at startup (optional warmup)."""
+    """Preload the embedding model at startup (optional warmup).
+
+    Tries the shared daemon first. If daemon is healthy, skips local model load.
+    """
+    # Try daemon first -- if it's running, no need to load in-process
+    try:
+        from omega.embedding_client import get_client
+
+        client = get_client()
+        if client is not None:
+            health = client.health()
+            if health and health.get("status") == "ok":
+                logger.info("Embedding daemon is healthy, skipping local model load")
+                return True
+    except Exception as e:
+        logger.debug("Embedding daemon health check failed: %s", e)
+
+    # Fall back to in-process ONNX
     if not _check_onnx_runtime():
         return False
     try:
@@ -386,7 +432,10 @@ def is_embedding_degraded() -> bool:
 
 
 def generate_embedding(text: str, dimension: int = 384) -> List[float]:
-    """Generate semantic embedding from text. Returns 384-dim normalized vector."""
+    """Generate semantic embedding from text. Returns 384-dim normalized vector.
+
+    Priority: daemon > in-process ONNX > hash fallback.
+    """
     global _LAST_EMBED_TIME, _embedding_degraded, _EMBEDDING_BACKEND
     # Check for idle-timeout unloading opportunity
     _maybe_unload_model()
@@ -399,13 +448,31 @@ def generate_embedding(text: str, dimension: int = 384) -> List[float]:
         _embedding_degraded = False
         return _EMBEDDING_CACHE[cache_key]
 
-    # In-process ONNX
+    # Try shared embedding daemon first (avoids per-process model loading)
+    try:
+        from omega.embedding_client import get_client
+
+        client = get_client()
+        if client is not None:
+            result = client.embed_single(text)
+            if result is not None:
+                _EMBEDDING_CACHE[cache_key] = result
+                while len(_EMBEDDING_CACHE) > _EMBEDDING_CACHE_MAX:
+                    _EMBEDDING_CACHE.popitem(last=False)
+                _LAST_EMBED_TIME = _time_module.monotonic()
+                _embedding_degraded = False
+                _EMBEDDING_BACKEND = "daemon"
+                return result
+    except Exception as e:
+        logger.debug("Embedding daemon unavailable: %s", e)
+
+    # In-process ONNX fallback
     if _has_embedding_backend():
         try:
             model = _get_embedding_model()
             if model is not None:
                 # Dispatch by model type, not _EMBEDDING_BACKEND flag.
-                # The flag can be stale after fallback transitions.
+                # The flag can be stale ("daemon") after daemon→ONNX fallback.
                 if isinstance(model, tuple):
                     tokenizer, session = model
                     emb = _onnx_encode(tokenizer, session, [text])
@@ -430,10 +497,25 @@ def generate_embedding(text: str, dimension: int = 384) -> List[float]:
 
 
 def generate_embeddings_batch(texts: List[str]) -> List[List[float]]:
-    """Generate embeddings for multiple texts in a single batch."""
+    """Generate embeddings for multiple texts in a single batch.
+
+    Priority: daemon > in-process ONNX > hash fallback.
+    """
     global _EMBEDDING_BACKEND
     if not texts:
         return []
+
+    # Try shared embedding daemon first
+    try:
+        from omega.embedding_client import get_client
+
+        client = get_client()
+        if client is not None:
+            result = client.embed_batch(texts)
+            if result is not None and len(result) == len(texts):
+                return result
+    except Exception as e:
+        logger.debug("Batch embedding daemon unavailable: %s", e)
 
     if _has_embedding_backend():
         try:

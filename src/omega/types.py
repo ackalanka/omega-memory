@@ -138,6 +138,18 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     AutoCaptureEventType.CONSTRAINT: TTLCategory.PERMANENT,
     # Trajectory distillation (permanent — ACT-R decay handles pruning)
     AutoCaptureEventType.SKILL_TEMPLATE: TTLCategory.PERMANENT,
+    # Short-term (1 day)
+    "sota_scan": TTLCategory.SHORT_TERM,
+    "merge_claim": TTLCategory.SHORT_TERM,
+    "merge_release": TTLCategory.SHORT_TERM,
+    "file_claimed": TTLCategory.SHORT_TERM,
+    "file_released": TTLCategory.SHORT_TERM,
+    "branch_claimed": TTLCategory.SHORT_TERM,
+    "branch_released": TTLCategory.SHORT_TERM,
+    "test": TTLCategory.SHORT_TERM,
+    "file_summary": TTLCategory.SHORT_TERM,
+    # Ephemeral (1 hour)
+    "code_chunk": TTLCategory.EPHEMERAL,
     # Oracle prediction intelligence (pro-only)
     AutoCaptureEventType.ORACLE_PREDICTION: TTLCategory.LONG_TERM,  # 90 days; no query path surfaces these
     AutoCaptureEventType.ORACLE_WALLET_SCORE: TTLCategory.LONG_TERM,
@@ -151,18 +163,6 @@ EVENT_TYPE_TTL: Dict[str, Optional[int]] = {
     AutoCaptureEventType.CONTRADICTION_DETECTED: TTLCategory.PERMANENT,
     AutoCaptureEventType.ENTITY_PROFILE_UPDATE: TTLCategory.LONG_TERM,
     AutoCaptureEventType.PREDICTION_SNAPSHOT: TTLCategory.LONG_TERM,
-    # Short-term (1 day)
-    "sota_scan": TTLCategory.SHORT_TERM,
-    "merge_claim": TTLCategory.SHORT_TERM,
-    "merge_release": TTLCategory.SHORT_TERM,
-    "file_claimed": TTLCategory.SHORT_TERM,
-    "file_released": TTLCategory.SHORT_TERM,
-    "branch_claimed": TTLCategory.SHORT_TERM,
-    "branch_released": TTLCategory.SHORT_TERM,
-    "test": TTLCategory.SHORT_TERM,
-    "file_summary": TTLCategory.SHORT_TERM,
-    # Ephemeral (1 hour)
-    "code_chunk": TTLCategory.EPHEMERAL,
 }
 
 

@@ -3,6 +3,7 @@ import importlib.util
 import json
 import os
 import pytest
+from omega.exceptions import StorageError
 from omega.sqlite_store import SQLiteStore
 
 _HAS_PRO = hasattr(SQLiteStore, "batch_record_feedback")
@@ -217,12 +218,12 @@ class TestContradictionOnStore:
         from unittest.mock import patch
         from omega.contradictions import ContradictionResult
 
-        old_id = store.store(content="Jason prefers light mode for the editor")
+        old_id = store.store(content="The user prefers light mode for the editor")
 
         # Mock detect_contradictions to return a definite contradiction
         mock_result = ContradictionResult(
             candidate_index=0,
-            candidate_content="Jason prefers light mode for the editor",
+            candidate_content="The user prefers light mode for the editor",
             confidence=0.85,
             reason="opposing terms found; different preference values",
             similarity=0.9,
@@ -241,7 +242,7 @@ class TestContradictionOnStore:
                     original(self_store, new_node_id, new_content, embedding)
 
             with patch.object(mod.SQLiteStore, "_check_contradictions", patched_check):
-                new_id = store.store(content="Jason prefers dark mode for the editor")
+                new_id = store.store(content="The user prefers dark mode for the editor")
 
         new_node = store.get_node(new_id)
         old_node = store.get_node(old_id)
@@ -365,8 +366,8 @@ class TestEdgeCases:
     """Edge cases and error handling."""
 
     def test_empty_content(self, store):
-        # Empty content should be rejected with ValueError
-        with pytest.raises(ValueError):
+        # Empty content should be rejected with StorageError
+        with pytest.raises(StorageError):
             store.store(content="")
 
     def test_large_content(self, store):
@@ -1421,7 +1422,7 @@ class TestEdgeCasesComprehensive:
     """Thorough edge-case and boundary coverage."""
 
     def test_empty_content_raises_valueerror(self, store):
-        with pytest.raises(ValueError, match="non-empty"):
+        with pytest.raises(StorageError, match="non-empty"):
             store.store(content="")
 
     def test_very_long_content_accepted(self, store):

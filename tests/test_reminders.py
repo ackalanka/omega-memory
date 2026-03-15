@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from omega.exceptions import ValidationError
 from omega.bridge import (
     create_reminder,
     dismiss_reminder,
@@ -57,15 +58,15 @@ class TestParseDuration:
         assert parse_duration("30 minutes") == timedelta(minutes=30)
 
     def test_invalid_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             parse_duration("abc")
 
     def test_empty_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             parse_duration("")
 
     def test_zero_raises(self):
-        with pytest.raises(ValueError):
+        with pytest.raises(ValidationError):
             parse_duration("0m")
 
 
@@ -276,26 +277,21 @@ class TestReminderHooks:
 
         result = handle_session_start({"session_id": "test-session", "project": ""})
         output = result.get("output", "")
-        assert "[REMINDERS]" in output
+        assert "[REMINDER]" in output
         assert "Urgent: review the plan" in output
 
     def test_session_start_no_reminders(self):
-        """Session start should NOT include [REMINDERS] block when no reminders are due."""
+        """Session start should NOT include [REMINDER] block when no reminders are due."""
         from omega.server.hook_server import handle_session_start
 
         result = handle_session_start({"session_id": "test-session", "project": ""})
         output = result.get("output", "")
-        assert "[REMINDERS]" not in output
+        assert "[REMINDER]" not in output
 
     def test_surface_memories_reminder_check(self):
         """Surface memories should include due reminders (debounced)."""
-        import inspect
-        from omega.server import hook_server
-        # Community edition handle_surface_memories doesn't include reminder check
-        src = inspect.getsource(hook_server.handle_surface_memories)
-        if "get_due_reminders" not in src:
-            pytest.skip("Reminder surfacing in surface_memories not available in community edition")
         from omega.bridge import _get_store
+        from omega.server import hook_server
 
         # Reset debounce
         hook_server._last_reminder_check = 0.0

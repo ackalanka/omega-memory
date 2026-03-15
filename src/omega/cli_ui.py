@@ -121,6 +121,55 @@ def print_bar_chart(
             print(f"  {label:<20} {count:>5}  {pct:5.1f}%  {bar}")
 
 
+def print_stats_card(data: Dict[str, Any]) -> None:
+    """Print a beautiful, screenshot-worthy stats card."""
+    from datetime import datetime
+
+    memory_count = f"{data['memory_count']:,}"
+    total_queries = f"{data['total_queries']:,}"
+    session_count = str(data["session_count"])
+    edge_count = f"{data['edge_count']:,}"
+
+    oldest = data.get("oldest_date")
+    if oldest:
+        try:
+            dt = datetime.fromisoformat(oldest.replace("Z", "+00:00"))
+            active_since = dt.strftime("%b %d, %Y")
+        except (ValueError, AttributeError):
+            active_since = oldest[:10] if oldest else "unknown"
+    else:
+        active_since = "today"
+
+    if RICH_AVAILABLE:
+        lines = [
+            "",
+            "[bold white]OMEGA[/bold white] [dim]Your Agent's Memory[/dim]",
+            "",
+            f"  [cyan]Memories stored:[/cyan]   [bold]{memory_count:>8}[/bold]",
+            f"  [cyan]Queries served:[/cyan]    [bold]{total_queries:>8}[/bold]",
+            f"  [cyan]Sessions powered:[/cyan]  [bold]{session_count:>8}[/bold]",
+            f"  [cyan]Connections:[/cyan]       [bold]{edge_count:>8}[/bold]",
+            f"  [cyan]Active since:[/cyan]  [bold]{active_since:>12}[/bold]",
+            "",
+            "[dim]github.com/omega-memory/omega-memory[/dim]",
+            "",
+        ]
+        console.print(Panel("\n".join(lines), border_style="cyan", expand=False, padding=(0, 2)))
+    else:
+        w = 41
+        print("+" + "-" * w + "+")
+        print("|" + "OMEGA -- Your Agent's Memory".center(w) + "|")
+        print("|" + " " * w + "|")
+        print("|" + f"  Memories stored:   {memory_count:>8}".ljust(w) + "|")
+        print("|" + f"  Queries served:    {total_queries:>8}".ljust(w) + "|")
+        print("|" + f"  Sessions powered:  {session_count:>8}".ljust(w) + "|")
+        print("|" + f"  Connections:       {edge_count:>8}".ljust(w) + "|")
+        print("|" + f"  Active since:  {active_since:>12}".ljust(w) + "|")
+        print("|" + " " * w + "|")
+        print("|" + "github.com/omega-memory/omega-memory".center(w) + "|")
+        print("+" + "-" * w + "+")
+
+
 _STATUS_SYMBOLS: Dict[str, Tuple[str, str]] = {
     "ok": ("  [bold green]✓[/bold green]", "  [OK]"),
     "fail": ("  [bold red]✗[/bold red]", "  [FAIL]"),
@@ -155,56 +204,3 @@ def print_summary(errors: int, warnings: int) -> None:
             print(f"All checks passed with {warnings} warning(s)")
         else:
             print(f"{errors} error(s), {warnings} warning(s)")
-
-
-def print_stats_card(
-    memories: int,
-    queries: int,
-    sessions: int,
-    connections: int,
-    active_since: str,
-) -> None:
-    """Print a beautiful, screenshot-worthy stats card.
-    
-    Args:
-        memories: Total number of memories stored
-        queries: Total queries served
-        sessions: Number of sessions powered
-        connections: Number of graph edges/connections
-        active_since: Date string (e.g., "Feb 09, 2026")
-    """
-    if RICH_AVAILABLE:
-        from rich.align import Align
-        from rich.panel import Panel
-        from rich.text import Text
-
-        content = Text()
-        content.append("OMEGA — Your Agent's Memory\n\n", style="bold cyan")
-        content.append(f"Memories stored:        {memories:,}\n", style="green")
-        content.append(f"Queries served:     {queries:,}\n", style="yellow")
-        content.append(f"Sessions powered:       {sessions:,}\n", style="magenta")
-        content.append(f"Connections:            {connections:,}\n", style="blue")
-        content.append(f"Active since:  {active_since}\n\n", style="dim")
-        content.append("github.com/omega-memory/omega-memory", style="dim italic")
-
-        panel = Panel(
-            Align.center(content),
-            title="[bold]OMEGA Stats Card[/bold]",
-            border_style="cyan",
-            expand=False,
-        )
-        console.print(panel)
-    else:
-        # Plain text fallback
-        width = 46
-        print("+" + "-" * width + "+")
-        print("|" + "    OMEGA — Your Agent's Memory".ljust(width) + "|")
-        print("|" + " " * width + "|")
-        print("|" + f"  Memories stored:        {memories:,}".ljust(width) + "|")
-        print("|" + f"  Queries served:     {queries:,}".ljust(width) + "|")
-        print("|" + f"  Sessions powered:       {sessions:,}".ljust(width) + "|")
-        print("|" + f"  Connections:            {connections:,}".ljust(width) + "|")
-        print("|" + f"  Active since:  {active_since}".ljust(width) + "|")
-        print("|" + " " * width + "|")
-        print("|" + "  github.com/omega-memory/omega-memory".ljust(width) + "|")
-        print("+" + "-" * width + "+")

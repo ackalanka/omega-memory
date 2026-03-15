@@ -23,7 +23,6 @@ import atexit
 import logging
 import os
 import re
-import time as _time
 import threading
 import unicodedata
 from datetime import datetime, timedelta, timezone
@@ -31,6 +30,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from omega import json_compat as json
+from omega.exceptions import ValidationError
+from omega.llm import llm_complete  # noqa: F401 — used in distill_trajectory, module-level for test patchability
 from omega.types import TTLCategory, AutoCaptureEventType
 
 logger = logging.getLogger("omega.bridge")
@@ -50,6 +51,12 @@ DEDUP_THRESHOLDS: Dict[str, float] = {
     AutoCaptureEventType.DECISION: 0.80,
     AutoCaptureEventType.LESSON_LEARNED: 0.85,
     AutoCaptureEventType.CHECKPOINT: 0.90,
+    AutoCaptureEventType.CONSTRAINT: 0.90,
+    AutoCaptureEventType.ADVISOR_INSIGHT: 0.75,  # lowered from 0.85 to catch broader restatements
+    AutoCaptureEventType.USER_FACT: 0.80,
+    AutoCaptureEventType.SKILL_TEMPLATE: 0.85,
+    AutoCaptureEventType.PROJECT_STATUS: 0.85,
+    "memory": 0.80,  # Generic fallback type — dedup to prevent accumulation
 }
 
 # Event types that participate in memory evolution (Zettelkasten-style).
@@ -57,6 +64,11 @@ EVOLUTION_TYPES = {
     AutoCaptureEventType.LESSON_LEARNED,
     AutoCaptureEventType.DECISION,
     AutoCaptureEventType.ERROR_PATTERN,
+    AutoCaptureEventType.CONSTRAINT,
+    AutoCaptureEventType.SKILL_TEMPLATE,
+    AutoCaptureEventType.PROJECT_STATUS,
+    AutoCaptureEventType.ADVISOR_INSIGHT,
+    AutoCaptureEventType.SESSION_SUMMARY,
 }
 EVOLUTION_THRESHOLD = 0.65
 
@@ -89,13 +101,13 @@ _INFRASTRUCTURE_EVENT_TYPES = frozenset({
 
 
 def _check_milestone(name: str) -> bool:
-    """Return True if milestone not yet achieved (first time). Creates marker."""
-    marker = OMEGA_HOME / "milestones" / name
-    if marker.exists():
-        return False
-    marker.parent.mkdir(parents=True, exist_ok=True)
-    marker.touch()
-    return True
+    """Return True if milestone not yet achieved (first time). Creates marker.
+
+    DEPRECATED: Use omega.milestones._check_milestone instead.
+    Kept as thin redirect for any callers that import from bridge.
+    """
+    from omega.milestones import _check_milestone as _cm
+    return _cm(name)
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +116,38 @@ def _check_milestone(name: str) -> bool:
 
 _store_instance = None
 _store_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Bridge initialization options
+# ---------------------------------------------------------------------------
+
+_bridge_enable_vector_search: bool = False
+_bridge_onnx_model_path: Optional[str] = None
+
+
+def initialize_bridge(
+    enable_vector_search: bool = False,
+    onnx_model_path: Optional[str] = None,
+) -> None:
+    """Configure bridge options before first store access.
+
+    Must be called before any store operation if non-default options are needed.
+
+    Args:
+        enable_vector_search: If True, pass the ONNX embed model to SQLiteStore
+            to enable offline semantic (vector) search via sqlite-vec.
+        onnx_model_path: Path to the ONNX embedding model file.  When *None*
+            the store will use its own default path (if any).
+    """
+    global _bridge_enable_vector_search, _bridge_onnx_model_path
+    _bridge_enable_vector_search = enable_vector_search
+    _bridge_onnx_model_path = onnx_model_path
+    logger.debug(
+        "Bridge configured: enable_vector_search=%s, onnx_model_path=%s",
+        enable_vector_search,
+        onnx_model_path,
+    )
 
 
 def _get_store():
@@ -125,8 +169,17 @@ def _get_store():
 
         from omega.sqlite_store import SQLiteStore
 
+        # Build keyword arguments based on bridge configuration.
+        store_kwargs: Dict[str, Any] = {}
+        if _bridge_enable_vector_search:
+            store_kwargs["onnx_model_path"] = _bridge_onnx_model_path
+            logger.info(
+                "Vector search enabled; ONNX model path: %s",
+                _bridge_onnx_model_path or "<store default>",
+            )
+
         # Init into local var first; only publish to global after full setup
-        store = SQLiteStore()
+        store = SQLiteStore(**store_kwargs)
         # Purge expired nodes on startup
         expired = store.cleanup_expired()
         if expired > 0:
@@ -156,6 +209,47 @@ def reset_memory():
             logger.debug("Store close failed during reset: %s", e)
     _store_instance = None
     _welcome_cache.clear()
+
+
+def semantic_search(
+    query: str,
+    top_k: int = 10,
+    project: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Perform offline semantic (vector) search using the ONNX embed model.
+
+    Requires the bridge to have been initialised with
+    ``enable_vector_search=True`` and the underlying SQLiteStore to support
+    the ``semantic_search`` method (sqlite-vec extension + ONNX runtime).
+
+    Args:
+        query:   Natural-language query string.
+        top_k:   Maximum number of results to return.
+        project: Optional project filter applied before vector ranking.
+
+    Returns:
+        List of memory dicts ordered by descending similarity score, each
+        containing at least ``{id, content, score}``.
+
+    Raises:
+        RuntimeError: If vector search is not enabled or not supported by
+            the current store backend.
+    """
+    if not _bridge_enable_vector_search:
+        raise RuntimeError(
+            "semantic_search requires enable_vector_search=True passed to "
+            "initialize_bridge() before the store is created."
+        )
+    store = _get_store()
+    if not hasattr(store, "semantic_search"):
+        raise RuntimeError(
+            "The current SQLiteStore backend does not expose semantic_search. "
+            "Ensure sqlite-vec and onnxruntime are installed."
+        )
+    kwargs: Dict[str, Any] = {"query": query, "top_k": top_k}
+    if project is not None:
+        kwargs["project"] = project
+    return store.semantic_search(**kwargs)
 
 
 # ---------------------------------------------------------------------------
@@ -555,6 +649,72 @@ def _relative_time(created_at) -> str:
     return f"{months} months ago"
 
 
+def _extract_facts(content: str) -> List[str]:
+    """Extract atomic facts from content for multi-key retrieval (no LLM).
+
+    Extracts:
+    - Technical terms (CamelCase, UPPER_CASE, dotted.paths)
+    - Quoted strings and backtick-delimited tokens
+    - Decision verbs with their objects ("chose X", "switched to Y")
+    - Key noun phrases from short sentences
+
+    Returns deduplicated list of fact strings, capped at 20.
+    """
+    facts: set = set()
+
+    # 1. CamelCase identifiers (e.g., SQLiteStore, MemoryResult)
+    # Match words starting with uppercase that have at least one lower-to-upper transition
+    for m in re.findall(r"\b([A-Z][a-zA-Z]*[a-z][A-Z][a-zA-Z]*)\b", content):
+        facts.add(m.lower())
+
+    # 2. UPPER_CASE constants (e.g., MAX_NODES, API_KEY)
+    for m in re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", content):
+        facts.add(m.lower())
+
+    # 3. Backtick-delimited tokens (e.g., `jwt`, `sqlite_store.py`)
+    for m in re.findall(r"`([^`]{2,40})`", content):
+        facts.add(m.lower().strip())
+
+    # 4. Quoted strings (e.g., "refresh token", 'auth method')
+    for m in re.findall(r"""["']([^"']{2,40})["']""", content):
+        facts.add(m.lower().strip())
+
+    # 5. Decision/action verb phrases — extract the object of key verbs
+    _DECISION_VERBS = (
+        r"(?:chose|choose|decided|switched?\s+to|migrated?\s+to|"
+        r"replaced?\s+with|use[ds]?|adopted?|selected?|"
+        r"implemented?|configured?|set\s+up|enabled?|disabled?)"
+    )
+    for m in re.finditer(
+        rf"\b{_DECISION_VERBS}\s+([A-Za-z0-9][\w\s./-]{{1,30}}?)(?:[.,;!?\n]|$)",
+        content, re.IGNORECASE,
+    ):
+        phrase = m.group(1).strip().rstrip(".")
+        if len(phrase) > 2:
+            facts.add(phrase.lower())
+
+    # 6. Dotted paths / module references (e.g., omega.sqlite_store, src/omega)
+    for m in re.findall(r"\b([\w]+(?:\.[\w]+){1,4})\b", content):
+        if not re.match(r"^\d+\.\d+", m):  # Skip version numbers like 1.0.0
+            facts.add(m.lower())
+
+    # 7. Technical compound terms (hyphenated, e.g., "multi-session", "cross-agent")
+    for m in re.findall(r"\b([a-z]+-[a-z]+(?:-[a-z]+)?)\b", content.lower()):
+        if len(m) > 4:
+            facts.add(m)
+
+    # Filter out very short or stopword-only facts
+    _STOP = {"the", "and", "for", "with", "that", "this", "from", "have", "been", "will", "not"}
+    filtered = []
+    for f in facts:
+        words = f.split()
+        meaningful = [w for w in words if w not in _STOP and len(w) > 1]
+        if meaningful:
+            filtered.append(f)
+
+    return sorted(set(filtered))[:20]
+
+
 def _compress_to_observation(content: str, event_type: str = "") -> Optional[str]:
     """Compress content to a concise observation (extractive, no LLM).
 
@@ -610,71 +770,6 @@ def _jaccard(text_a: str, text_b: str, min_word_len: int = 4) -> float:
     if not words_a or not words_b:
         return 0.0
     return len(words_a & words_b) / len(words_a | words_b)
-
-
-def _extract_facts(content: str) -> List[str]:
-    """Extract atomic facts from content for multi-key retrieval (no LLM).
-
-    Extracts:
-    - Technical terms (CamelCase, UPPER_CASE, dotted.paths)
-    - Quoted strings and backtick-delimited tokens
-    - Decision verbs with their objects ("chose X", "switched to Y")
-    - Key noun phrases from short sentences
-
-    Returns deduplicated list of fact strings, capped at 20.
-    """
-    facts: set = set()
-
-    # 1. CamelCase identifiers (e.g., SQLiteStore, MemoryResult)
-    for m in re.findall(r"\b([A-Z][a-zA-Z]*[a-z][A-Z][a-zA-Z]*)\b", content):
-        facts.add(m.lower())
-
-    # 2. UPPER_CASE constants (e.g., MAX_NODES, API_KEY)
-    for m in re.findall(r"\b([A-Z][A-Z0-9_]{2,})\b", content):
-        facts.add(m.lower())
-
-    # 3. Backtick-delimited tokens (e.g., `jwt`, `sqlite_store.py`)
-    for m in re.findall(r"`([^`]{2,40})`", content):
-        facts.add(m.lower().strip())
-
-    # 4. Quoted strings (e.g., "refresh token", 'auth method')
-    for m in re.findall(r"""["']([^"']{2,40})["']""", content):
-        facts.add(m.lower().strip())
-
-    # 5. Decision/action verb phrases — extract the object of key verbs
-    _DECISION_VERBS = (
-        r"(?:chose|choose|decided|switched?\s+to|migrated?\s+to|"
-        r"replaced?\s+with|use[ds]?|adopted?|selected?|"
-        r"implemented?|configured?|set\s+up|enabled?|disabled?)"
-    )
-    for m in re.finditer(
-        rf"\b{_DECISION_VERBS}\s+([A-Za-z0-9][\w\s./-]{{1,30}}?)(?:[.,;!?\n]|$)",
-        content, re.IGNORECASE,
-    ):
-        phrase = m.group(1).strip().rstrip(".")
-        if len(phrase) > 2:
-            facts.add(phrase.lower())
-
-    # 6. Dotted paths / module references (e.g., omega.sqlite_store, src/omega)
-    for m in re.findall(r"\b([\w]+(?:\.[\w]+){1,4})\b", content):
-        if not re.match(r"^\d+\.\d+", m):  # Skip version numbers like 1.0.0
-            facts.add(m.lower())
-
-    # 7. Technical compound terms (hyphenated, e.g., "multi-session", "cross-agent")
-    for m in re.findall(r"\b([a-z]+-[a-z]+(?:-[a-z]+)?)\b", content.lower()):
-        if len(m) > 4:
-            facts.add(m)
-
-    # Filter out very short or stopword-only facts
-    _STOP = {"the", "and", "for", "with", "that", "this", "from", "have", "been", "will", "not"}
-    filtered = []
-    for f in facts:
-        words = f.split()
-        meaningful = [w for w in words if w not in _STOP and len(w) > 1]
-        if meaningful:
-            filtered.append(f)
-
-    return sorted(set(filtered))[:20]
 
 
 def _auto_relate(store, node_id: str, max_related: int = 3, min_similarity: float = 0.65) -> int:
@@ -737,6 +832,18 @@ def _auto_relate(store, node_id: str, max_related: int = 3, min_similarity: floa
     except Exception as e:
         logger.debug(f"_auto_relate failed for {node_id[:12]}: {e}")
         return 0
+
+
+def _schedule_auto_relate(store, node_id: str) -> None:
+    """Fire _auto_relate in a background daemon thread (non-blocking)."""
+    def _run():
+        try:
+            _auto_relate(store, node_id)
+        except Exception as e:
+            logger.debug(f"Background _auto_relate failed for {node_id[:12]}: {e}")
+
+    t = threading.Thread(target=_run, daemon=True, name="auto-relate")
+    t.start()
 
 
 _CROSS_TYPE_SUPERSEDE = {
@@ -811,9 +918,14 @@ def _split_atomic_facts(content: str, event_type: str) -> List[str]:
     user_fact nodes to improve single-mention recall.
 
     Returns list of fact strings (max 5).
+
+    Gated behind OMEGA_ATOMIC_FACTS=1 (off by default).
     """
+    if os.environ.get("OMEGA_ATOMIC_FACTS", "0") != "1":
+        return []
     if len(content) < 50:
         return []
+    # Only split facts from user-authored types, not agent-generated content
     _FACT_SPLIT_TYPES = {
         "decision", "user_fact",
     }
@@ -826,6 +938,8 @@ def _split_atomic_facts(content: str, event_type: str) -> List[str]:
         if len(sentence) < 15 or len(sentence) > 200:
             continue
         s_lower = sentence.lower()
+        # Require first-person or infrastructure context to confirm it's a user fact,
+        # not an agent observation like "The component was a God object"
         _has_user_signal = bool(re.search(
             r"\b(?:we|our|my|i)\s+|"
             r"\b(?:the|our)\s+(?:db|database|server|api|config|project|repo|app|service|endpoint|url|path|port)\b",
@@ -864,6 +978,39 @@ def _split_atomic_facts(content: str, event_type: str) -> List[str]:
             seen.add(f_norm)
             unique.append(f)
     return unique[:5]
+
+
+def _schedule_entity_extraction(
+    store: Any,
+    node_id: str,
+    content: str,
+    event_type: str,
+) -> None:
+    """Fire entity extraction in a background daemon thread.
+
+    Non-blocking. Silently skipped if API key missing or extraction disabled.
+    """
+    import os as _os
+    if _os.environ.get("OMEGA_ENTITY_EXTRACTION", "").lower() in ("0", "false", "off"):
+        return
+    if not _os.environ.get("ANTHROPIC_API_KEY"):
+        return
+
+    def _run():
+        try:
+            from omega.entity.extraction import extract_entities, resolve_and_link
+            from omega.entity.engine import get_entity_manager
+            from pathlib import Path as _Path
+
+            extraction = extract_entities(content, event_type)
+            if extraction["entities"]:
+                em = get_entity_manager(_Path(store.db_path))
+                resolve_and_link(store, em, node_id, extraction)
+        except Exception as e:
+            logger.debug("Async entity extraction failed: %s", e)
+
+    t = threading.Thread(target=_run, daemon=True, name="entity-extraction")
+    t.start()
 
 
 # ---------------------------------------------------------------------------
@@ -931,7 +1078,8 @@ def auto_capture(
         return "**Memory Blocked** (zero-token outcome)"
 
     # Block JSON-blob decisions — raw tool output stored as "decisions"
-    if event_type == "decision":
+    # Exempt coord_dual_write: its [domain] prefix is not JSON
+    if event_type == "decision" and _source != "coord_dual_write":
         # Strip known prefixes to check the actual body
         _body = content
         for _pfx in ("Decision: ", "Plan/decision captured: ", "Fact: "):
@@ -973,20 +1121,26 @@ def auto_capture(
         existing_tags = meta.get("tags", [])
         meta["tags"] = sorted(set(existing_tags + auto_tags))[:15]
 
-    # Fact extraction for high-value types — creates additional retrieval keys
+    # Fact extraction for high-value types — merge fact terms into tags
+    # (boosted in Phase 2.5 word/tag overlap for retrieval).
     _FACT_EXTRACTION_TYPES = {"decision", "lesson_learned", "session_summary", "error_pattern", "advisor_insight"}
     if event_type in _FACT_EXTRACTION_TYPES:
         try:
             facts = _extract_facts(content)
             if facts:
-                meta["facts"] = facts
+                # Merge fact terms into tags (boosted in Phase 2.5 word/tag overlap)
                 existing_tags = meta.get("tags", [])
+                # Take the shortest/most specific facts as tags (avoid long phrases)
                 fact_tags = [f for f in facts if len(f) <= 25 and " " not in f]
                 meta["tags"] = sorted(set(existing_tags + fact_tags))[:20]
         except Exception as e:
             logger.debug(f"Fact extraction failed: {e}")
 
     ttl = ttl_override if ttl_override is not None else TTLCategory.for_event_type(event_type)
+
+    # System insights are architectural knowledge — make them permanent
+    if ttl is not None and meta.get("category") == "system_insight":
+        ttl = None  # None = permanent (no expiry)
 
     # ------------------------------------------------------------------
     # Phase 1 + 2: Content dedup, error burst, and evolution
@@ -996,9 +1150,21 @@ def auto_capture(
     dedup_threshold = DEDUP_THRESHOLDS.get(event_type)
     _similar_results = None  # Lazy-loaded, shared between dedup and evolution
 
+    # Pre-compute embedding once — reused for dedup query and final store
+    _precomputed_embedding = None
     if dedup_threshold is not None or event_type in EVOLUTION_TYPES:
         try:
-            _similar_results = store.query(content[:200], limit=8)
+            from omega.embedding import generate_embedding
+            _precomputed_embedding = generate_embedding(content)
+        except Exception as e:
+            logger.debug(f"Pre-computed embedding generation failed: {e}")
+
+    if dedup_threshold is not None or event_type in EVOLUTION_TYPES:
+        try:
+            _similar_results = store.query(
+                content[:200], limit=8,
+                query_embedding=_precomputed_embedding,
+            )
         except Exception as e:
             logger.debug(f"Similar-content query failed: {e}")
 
@@ -1010,6 +1176,7 @@ def auto_capture(
                     continue
                 # Session filter for dedup: only dedup within same session
                 # Exception: decisions, lessons, and task completions dedup cross-session
+                # (same architectural choice, lesson, or completion restated across sessions)
                 _CROSS_SESSION_DEDUP_TYPES = {
                     AutoCaptureEventType.DECISION,
                     AutoCaptureEventType.LESSON_LEARNED,
@@ -1028,10 +1195,9 @@ def auto_capture(
                     store.update_node(existing.id, access_count=(existing.access_count or 0) + 1)
                     store.stats.setdefault("content_dedup_skips", 0)
                     store.stats["content_dedup_skips"] += 1
-                    linked = _auto_relate(store, existing.id)
+                    _schedule_auto_relate(store, existing.id)
                     logger.debug(f"Content dedup: skipped {event_type} (jaccard={sim:.2f}), reusing {existing.id[:12]}")
-                    link_info = f", {linked} linked" if linked else ""
-                    return f"Deduped → {existing.id[:12]}{link_info}"
+                    return f"Deduped → {existing.id}"
         except Exception as e:
             logger.debug(f"Content dedup check skipped: {e}")
 
@@ -1074,8 +1240,9 @@ def auto_capture(
                         )
                         store.stats.setdefault("reconfirmation_bumps", 0)
                         store.stats["reconfirmation_bumps"] += 1
-                        return f"Reconfirmed {existing.id[:12]} (access bumped)"
+                        return f"Reconfirmed {existing.id} (access bumped)"
                     # Allow evolution with even 1 new word (was 3 — caused dead zone)
+                    # The sentence-level filter below still requires >= 2 new words per sentence
 
                     evolved = existing.content.rstrip()
                     if not evolved.endswith("."):
@@ -1112,13 +1279,55 @@ def auto_capture(
 
                         store.stats.setdefault("memory_evolutions", 0)
                         store.stats["memory_evolutions"] += 1
-                        linked = _auto_relate(store, existing.id)
+                        _schedule_auto_relate(store, existing.id)
                         logger.info(f"Memory evolved: {existing.id[:12]} (evolution #{evo_count}, jaccard={sim:.2f})")
-                        link_info = f", {linked} linked" if linked else ""
-                        return f"Evolved {existing.id[:12]} (#{evo_count}{link_info})"
+                        return f"Evolved {existing.id} (#{evo_count})"
                     break  # Only try the top match
         except Exception as e:
             logger.debug(f"Memory evolution check skipped: {e}")
+
+    # ------------------------------------------------------------------
+    # Phase 2.5: Conflict detection — find contradictions with existing
+    # ------------------------------------------------------------------
+    _conflict_results = []
+    if _similar_results and event_type in (
+        "user_preference", "decision", "lesson_learned", "error_pattern"
+    ):
+        try:
+            from omega.conflicts import detect_conflicts
+
+            _conflict_results = detect_conflicts(
+                content, event_type, _similar_results[:5],
+            )
+
+            # Auto-resolve: mark old memory as outdated
+            for conflict in _conflict_results:
+                if conflict["auto_resolve"] and conflict.get("existing_id"):
+                    try:
+                        store.record_feedback(
+                            conflict["existing_id"], "outdated",
+                            reason=f"Conflict auto-resolved: {conflict['reason']}",
+                        )
+                    except Exception as e:
+                        logger.debug(f"Auto-resolve feedback failed: {e}")
+
+                # Flag-only: add conflict_flags to metadata for visibility
+                if not conflict["auto_resolve"] and conflict.get("existing_id"):
+                    try:
+                        existing_node = store.get_node(conflict["existing_id"])
+                        if existing_node:
+                            emeta = dict(existing_node.metadata or {})
+                            flags = emeta.get("conflict_flags", [])
+                            flags.append({
+                                "reason": conflict["reason"],
+                                "confidence": conflict["confidence"],
+                            })
+                            emeta["conflict_flags"] = flags[-5:]  # Keep last 5
+                            store.update_node(conflict["existing_id"], metadata=emeta)
+                    except Exception as e:
+                        logger.debug(f"Conflict flagging failed: {e}")
+        except Exception as e:
+            logger.debug(f"Conflict detection failed: {e}")
 
     # ------------------------------------------------------------------
     # Phase 3: Store new node
@@ -1135,29 +1344,62 @@ def auto_capture(
         content=content,
         session_id=session_id,
         metadata=meta,
+        embedding=_precomputed_embedding,
         ttl_seconds=ttl,
         entity_id=entity_id,
         agent_type=agent_type,
     )
 
     ttl_str = _human_ttl(ttl)
-    output = "# Memory Captured\n\n"
-    output += f"**Event Type:** {event_type}\n"
-    output += f"**Node ID:** `{node_id}`\n"
-    output += f"**TTL:** {ttl_str}\n"
-    if session_id:
-        output += f"**Session:** `{session_id[:20]}...`\n"
-    if project:
-        output += f"**Project:** {project}\n"
-    if entity_id:
-        output += f"**Entity:** `{entity_id}`\n"
-    if agent_type:
-        output += f"**Agent Type:** `{agent_type}`\n"
+    output = f"Stored {node_id} ({event_type}, {ttl_str})"
+
+    # Surface deep contradiction detection results
+    try:
+        contradiction_results = store.get_last_contradiction_results()
+        if contradiction_results:
+            cr_lines = []
+            for cr in contradiction_results:
+                cr_lines.append(
+                    f"  - `{cr['node_id'][:16]}` ({cr['confidence']:.0%}): {cr['reason']}"
+                )
+            output += "\n\n[CONTRADICTION] New memory may contradict:\n" + "\n".join(cr_lines)
+    except Exception as e:
+        logger.debug("Contradiction surfacing failed: %s", e)
+
+    # Surface capacity warning if near limit
+    if hasattr(store, '_capacity_warning') and store._capacity_warning:
+        output += f"\n\n**Warning:** {store._capacity_warning}"
+
+    # Append conflict information compactly
+    if _conflict_results:
+        resolved = sum(1 for c in _conflict_results if c["auto_resolve"])
+        flagged = len(_conflict_results) - resolved
+        parts = []
+        if resolved:
+            parts.append(f"{resolved} auto-resolved")
+        if flagged:
+            parts.append(f"{flagged} flagged")
+        output += f" | conflicts: {', '.join(parts)}"
+
+    # Milestone check (cheap: one node_count query + file existence check)
+    try:
+        from omega.milestones import check_capture_milestones
+        count = store.node_count()
+        milestone_msg = check_capture_milestones(count)
+        if milestone_msg:
+            output += f" | {milestone_msg}"
+    except Exception as e:
+        logger.debug("Milestone check failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Phase 3.1: Async entity extraction (non-blocking)
+    # ------------------------------------------------------------------
+    _schedule_entity_extraction(store, node_id, content, event_type)
 
     # ------------------------------------------------------------------
     # Phase 3.5: Observation compression for high-value types
     # ------------------------------------------------------------------
-    _HIGH_VALUE_OBSERVATION_TYPES = {"decision", "lesson_learned", "error_pattern", "user_preference"}
+    _HIGH_VALUE_OBSERVATION_TYPES = {"decision", "lesson_learned", "error_pattern", "user_preference", "constraint", "advisor_insight"}
     if event_type in _HIGH_VALUE_OBSERVATION_TYPES:
         try:
             observation = _compress_to_observation(content, event_type)
@@ -1168,11 +1410,9 @@ def auto_capture(
             logger.debug(f"Observation compression failed for {node_id[:12]}: {e}")
 
     # ------------------------------------------------------------------
-    # Phase 4: Auto-relate — link to similar existing memories
+    # Phase 4: Auto-relate — link to similar existing memories (background)
     # ------------------------------------------------------------------
-    linked = _auto_relate(store, node_id)
-    if linked:
-        output += f"**Related:** {linked} linked\n"
+    _schedule_auto_relate(store, node_id)
 
     # ------------------------------------------------------------------
     # Phase 4.1: Contradiction detection — supersede old conflicting memories
@@ -1182,7 +1422,7 @@ def auto_capture(
             store, node_id, content, event_type, entity_id,
         )
         if supersede_count:
-            output += f"**Superseded:** {supersede_count} outdated\n"
+            output += f" | {supersede_count} superseded"
     except Exception as e:
         logger.debug(f"Contradiction detection failed for {node_id[:12]}: {e}")
 
@@ -1213,23 +1453,107 @@ def auto_capture(
             store.add_edge(node_id, fact_id, "contains_fact", 1.0)
             fact_count += 1
         if fact_count:
-            output += f"**Facts:** {fact_count} extracted\n"
+            output += f" | {fact_count} facts extracted"
     except Exception as e:
         logger.debug(f"Atomic fact splitting failed for {node_id[:12]}: {e}")
 
     # ------------------------------------------------------------------
-    # Phase 5: Milestone celebrations
+    # Phase 4.5: Auto-supersede stale reminders
     # ------------------------------------------------------------------
-    try:
-        if _check_milestone("first-capture"):
-            output += "\n[OMEGA] First memory captured! Your knowledge base is now growing.\n"
-        else:
-            # Check for 10th capture milestone
-            total = store.node_count()
-            if total == 10 and _check_milestone("tenth-capture"):
-                output += "\n[OMEGA] 10 memories stored — run omega_weekly_digest to see what OMEGA has learned.\n"
-    except Exception:
-        pass
+    _COMPLETION_TYPES = {"decision", "task_completion"}
+    if event_type in _COMPLETION_TYPES:
+        try:
+            superseded_count = 0
+            superseded_ids: set = set()
+            content_words = {w.lower() for w in content.split() if len(w) > 3}
+
+            # --- Pass 1: Embedding similarity (threshold lowered to 0.40) ---
+            embedding = store.get_embedding(node_id)
+            if embedding:
+                similar = store.find_similar(embedding, limit=10)
+                for r in similar:
+                    if r.id == node_id:
+                        continue
+                    r_type = (r.metadata or {}).get("event_type")
+                    if r_type not in ("reminder", "checkpoint"):
+                        continue
+                    if (r.metadata or {}).get("superseded"):
+                        continue
+                    if r.relevance < 0.40:
+                        continue
+                    superseded_ids.add(r.id)
+
+            # --- Pass 2: Keyword matching (3+ word overlap, like task auto-resolve) ---
+            with store._lock:
+                pending_rows = store._conn.execute(
+                    "SELECT node_id, content FROM memories "
+                    "WHERE event_type = 'reminder' "
+                    "AND json_extract(metadata, '$.reminder_status') = 'pending'"
+                ).fetchall()
+            for r_id, r_content in pending_rows:
+                if r_id in superseded_ids:
+                    continue
+                r_words = {w.lower() for w in (r_content or "").split() if len(w) > 3}
+                matches = sum(1 for w in r_words if w in content_words)
+                if matches >= 3:
+                    superseded_ids.add(r_id)
+
+            # --- Apply: mark superseded AND set reminder_status = dismissed ---
+            for s_id in superseded_ids:
+                r_row = store.get(s_id)
+                if not r_row:
+                    continue
+                r_meta = dict(r_row.metadata or {})
+                r_meta["superseded"] = True
+                r_meta["superseded_by"] = node_id
+                r_meta["reminder_status"] = "dismissed"
+                r_meta["dismissed_at"] = datetime.now(timezone.utc).isoformat()
+                r_meta["dismissed_reason"] = "auto_superseded"
+                store.update_node(s_id, metadata=r_meta)
+                r_type = r_meta.get("event_type", "reminder")
+                store._log_forgetting_external(
+                    s_id, r_row.content, r_type,
+                    "auto_superseded", {"superseded_by": node_id},
+                )
+                superseded_count += 1
+            if superseded_count:
+                output += f" | superseded {superseded_count} reminder(s)"
+                logger.info(f"Auto-superseded {superseded_count} reminders for {node_id}")
+        except Exception as e:
+            logger.debug(f"Auto-supersede failed for {node_id}: {e}")
+
+    # ------------------------------------------------------------------
+    # Phase 5: Implicit positive feedback — retrieval-then-store signal
+    # ------------------------------------------------------------------
+    _IMPLICIT_FB_TYPES = {"decision", "lesson_learned", "error_pattern"}
+    if event_type in _IMPLICIT_FB_TYPES:
+        try:
+            ctx_entries = store.get_retrieval_context()
+            if ctx_entries:
+                content_words = {w.lower() for w in content.split() if len(w) > 3}
+                implicit_count = 0
+                for entry in ctx_entries:
+                    query_text = entry.get("query_text", "")
+                    if not query_text:
+                        continue
+                    query_words = {w.lower() for w in query_text.split() if len(w) > 3}
+                    if not query_words:
+                        continue
+                    overlap = len(content_words & query_words) / len(query_words)
+                    if overlap >= 0.30:
+                        entry_nid = entry.get("node_id", "")
+                        if entry_nid and entry_nid != node_id:
+                            store.record_feedback(
+                                entry_nid, "helpful",
+                                reason="implicit: retrieval-then-store",
+                            )
+                            implicit_count += 1
+                if implicit_count:
+                    store.stats.setdefault("implicit_feedback_boosts", 0)
+                    store.stats["implicit_feedback_boosts"] += implicit_count
+                    logger.debug(f"Implicit feedback: boosted {implicit_count} memories for {node_id[:12]}")
+        except Exception as e:
+            logger.debug(f"Implicit feedback failed for {node_id[:12]}: {e}")
 
     logger.info(f"Auto-captured {event_type}: {node_id}")
     return output
@@ -1256,12 +1580,13 @@ def store(
     )
 
 
-def remember(text: str, session_id: Optional[str] = None) -> str:
+def remember(text: str, session_id: Optional[str] = None, entity_id: Optional[str] = None) -> str:
     """User-facing 'remember this' -- stores with user_preference type."""
     return auto_capture(
         content=text,
         event_type=AutoCaptureEventType.USER_PREFERENCE,
         session_id=session_id,
+        entity_id=entity_id or "omega",
         metadata={"source": "user_remember"},
     )
 
@@ -1281,14 +1606,19 @@ def delete_memory(memory_id: str) -> Dict[str, Any]:
 
 
 def edit_memory(memory_id: str, new_content: str) -> Dict[str, Any]:
-    """Edit a memory's content by its node ID."""
+    """Edit a memory's content by its node ID.
+
+    After editing, extracts style observations from the diff and stores
+    them as user_preference memories (memory-from-edits pattern).
+    """
     db = _get_store()
     try:
         node = db.get_node(memory_id)
         if node is None:
             return {"success": False, "error": f"Memory {memory_id} not found"}
 
-        old_preview = node.content[:80]
+        old_content = node.content
+        old_preview = old_content[:80]
         emeta = dict(node.metadata or {})
         emeta["edited_at"] = datetime.now(timezone.utc).isoformat()
         emeta["edit_count"] = emeta.get("edit_count", 0) + 1
@@ -1296,15 +1626,120 @@ def edit_memory(memory_id: str, new_content: str) -> Dict[str, Any]:
         db.update_node(memory_id, content=new_content, metadata=emeta)
 
         logger.info(f"Edited memory {memory_id[:12]}")
-        return {
+
+        # Memory-from-edits: extract style observations from the diff
+        edit_observation = _extract_edit_observation(
+            old_content, new_content,
+            event_type=(node.metadata or {}).get("event_type", "memory"),
+            memory_id=memory_id,
+        )
+
+        result = {
             "success": True,
             "id": memory_id,
             "old_content_preview": old_preview,
             "new_content_preview": new_content[:80],
         }
+
+        if edit_observation:
+            result["style_observation"] = edit_observation
+
+        return result
     except Exception as e:
         logger.error(f"Failed to edit memory {memory_id[:12]}: {e}", exc_info=True)
-        return {"success": False, "error": str(e)}
+        return {"success": False, "error": "Failed to edit memory"}
+
+
+def _extract_edit_observation(
+    old_content: str,
+    new_content: str,
+    event_type: str = "memory",
+    memory_id: str = "",
+) -> Optional[str]:
+    """Extract a style observation from a human edit and store it.
+
+    Analyzes the diff between old and new content to detect patterns:
+    - Length changes (conciseness preference)
+    - Word additions/removals (terminology preferences)
+    - Structural changes (formatting preferences)
+
+    Returns the observation text if one was stored, None otherwise.
+    """
+    # Skip trivial edits
+    if not old_content or not new_content:
+        return None
+    if old_content.strip() == new_content.strip():
+        return None
+
+    old_words = set(old_content.lower().split())
+    new_words = set(new_content.lower().split())
+    added_words = new_words - old_words
+    removed_words = old_words - new_words
+
+    # Skip if change is too small to learn from
+    if len(added_words) + len(removed_words) < 3:
+        return None
+
+    observations = []
+
+    # Length change
+    old_len = len(old_content)
+    new_len = len(new_content)
+    if new_len < old_len * 0.7:
+        observations.append("prefers more concise/shorter content")
+    elif new_len > old_len * 1.5:
+        observations.append("prefers more detailed/longer content")
+
+    # Significant word additions (filter noise words)
+    _noise = {"the", "a", "an", "is", "are", "was", "were", "and", "or", "but",
+              "in", "on", "at", "to", "for", "of", "with", "by", "from", "that",
+              "this", "it", "not", "be", "have", "has", "had", "do", "does", "did"}
+    meaningful_added = {w for w in added_words if w not in _noise and len(w) > 2}
+    meaningful_removed = {w for w in removed_words if w not in _noise and len(w) > 2}
+
+    if meaningful_removed and meaningful_added and len(meaningful_removed) <= 5:
+        # Word replacement pattern — most valuable signal
+        removed_sample = ", ".join(sorted(meaningful_removed)[:3])
+        added_sample = ", ".join(sorted(meaningful_added)[:3])
+        observations.append(f"replaced terms ({removed_sample}) with ({added_sample})")
+
+    # Formatting changes
+    old_has_bullets = "- " in old_content or "* " in old_content
+    new_has_bullets = "- " in new_content or "* " in new_content
+    if not old_has_bullets and new_has_bullets:
+        observations.append("prefers bullet-point formatting")
+    elif old_has_bullets and not new_has_bullets:
+        observations.append("prefers prose over bullet points")
+
+    old_has_headers = "## " in old_content or "# " in old_content
+    new_has_headers = "## " in new_content or "# " in new_content
+    if not old_has_headers and new_has_headers:
+        observations.append("prefers headers/structure in content")
+
+    if not observations:
+        return None
+
+    # Build and store the observation
+    observation_text = (
+        f"Edit pattern on {event_type} memory: " + "; ".join(observations) + "."
+    )
+
+    try:
+        auto_capture(
+            content=observation_text,
+            event_type="user_preference",
+            metadata={
+                "source": "edit_observation",
+                "derived_from": memory_id,
+                "edited_event_type": event_type,
+                "observation_type": "style",
+            },
+        )
+        logger.info("Stored edit observation for %s: %s", memory_id[:12], observation_text[:80])
+        return observation_text
+    except Exception as e:
+        logger.warning("Failed to store edit observation: %s", e)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -1331,6 +1766,7 @@ def query(
     memory_type: Optional[str] = None,
     include_contradicted: bool = False,
     valid_at: Optional[str] = None,
+    status: Optional[str] = None,
 ) -> str:
     """Search memories with optional intent-aware routing.
 
@@ -1339,7 +1775,7 @@ def query(
         context_tags: Current context tags like language, tools (for re-ranking boost).
         filter_tags: Hard filter -- only return memories containing ALL specified tags.
         temporal_range: Optional (start_iso, end_iso) tuple. Auto-inferred from query if not given.
-        surfacing_context: SurfacingContext enum for context-aware scoring.
+        surfacing_context: SurfacingContext enum for context-aware scoring (error_debug, planning, etc.).
         strength_min: Minimum strength score (0.0-1.0). Filters out weak/decayed memories.
 
     Returns:
@@ -1371,10 +1807,15 @@ def query(
             "entity_id": entity_id,
             "agent_type": agent_type,
             "query_hint": event_type,
+            "temporal_boost_only": _temporal_boost_only,
             "scope": _scope,
         }
         if surfacing_context is not None:
             query_kwargs["surfacing_context"] = surfacing_context
+        if perspective:
+            query_kwargs["perspective"] = perspective
+        if valid_at:
+            query_kwargs["valid_at"] = valid_at
         results = db.query(enhanced, **query_kwargs)
 
         # Filter by event_type if specified
@@ -1388,37 +1829,120 @@ def query(
                 r for r in results if filter_set.issubset({str(t).lower() for t in (r.metadata or {}).get("tags", [])})
             ]
 
+        # Filter by memory_type
+        if memory_type and results:
+            results = [r for r in results if (r.metadata or {}).get("memory_type") == memory_type]
+
+        # Filter by lifecycle status (active, superseded, speculative, archived)
+        if status and results:
+            results = [r for r in results if (r.metadata or {}).get("status", "active") == status]
+
+        # Filter to only contradicted memories
+        if include_contradicted and results:
+            results = [r for r in results if (r.metadata or {}).get("contradicted_by")]
+
         results = results[:limit]
 
+        # Filter by minimum strength score
+        if strength_min is not None and strength_min > 0:
+            results = [r for r in results if getattr(r, "strength", 0.0) >= strength_min]
+
+        # Extract query confidence from results
+        _qconf = None
+        if results:
+            _qconf = (results[0].metadata or {}).get("_query_confidence")
+
         # Format
-        output = f"# Query Results ({len(results)})\n\n"
-        output += f"**Query:** {query_text}\n"
-        if session_id:
-            output += f"**Session:** `{session_id[:20]}...`\n"
-        if event_type:
-            output += f"**Event Type:** {event_type}\n"
-        output += "\n"
+        _conf_label = ""
+        if _qconf is not None and _qconf < 0.3:
+            _conf_label = " (confidence: low -- results may not be relevant)"
+        elif _qconf is not None and _qconf <= 0.7:
+            _conf_label = " (confidence: medium)"
+        output = f"Results: {len(results)}{_conf_label}\n"
 
         if results:
             for i, node in enumerate(results[:limit], 1):
                 ntype = (node.metadata or {}).get("event_type", "memory")
                 preview = node.content[:200] + "..." if len(node.content) > 200 else node.content
-                output += f"## {i}. [{ntype}] `{node.id[:12]}...`\n"
+                _str = getattr(node, "strength", 0.0)
+                _meta = node.metadata or {}
+                _status = _meta.get("status", "active")
+                _status_tag = f" [{_status}]" if _status != "active" else ""
+                output += f"## {i}. [{ntype}] `{node.id}` (str: {_str:.2f}){_status_tag}\n"
                 output += f"{preview}\n"
-                tags = (node.metadata or {}).get("tags", [])
-                if tags:
-                    output += f"*Tags: {', '.join(str(t) for t in tags[:5])}*\n"
-                output += f"*Created: {node.created_at.isoformat()[:16]}*\n\n"
+                created = node.created_at.isoformat()[:16] if node.created_at else ""
+                _extras = []
+                if _meta.get("source_uri"):
+                    _extras.append(f"source: {_meta['source_uri']}")
+                if _meta.get("derived_from"):
+                    _extras.append(f"derived from: {_meta['derived_from']}")
+                _extras_str = f" | {' | '.join(_extras)}" if _extras else ""
+                output += f"*{created}{_extras_str}*\n\n"
         else:
             output += "*No matching memories found.*\n"
+
+        # Auto-inject relevant constraints (always, regardless of event_type filter)
+        if event_type != "constraint":
+            try:
+                result_ids = {n.id for n in results}
+                constraint_nodes = db.get_by_type("constraint", limit=10)
+                matching_constraints = []
+                if constraint_nodes:
+                    query_words = {w.lower() for w in query_text.split() if len(w) > 2}
+                    for cn in constraint_nodes:
+                        if cn.id in result_ids:
+                            continue
+                        if (cn.metadata or {}).get("superseded"):
+                            continue
+                        content_words = {w.lower() for w in cn.content.split() if len(w) > 2}
+                        if query_words & content_words:
+                            matching_constraints.append(cn)
+                if matching_constraints:
+                    output += "\n---\n**Active Constraints:**\n"
+                    for cr in matching_constraints[:3]:
+                        preview = cr.content[:150]
+                        output += f"- [`{cr.id}`] {preview}\n"
+            except Exception as e:
+                logger.debug("Constraint injection failed: %s", e)
+
+        # Auto-inject relevant user preferences for preference-intent queries
+        _PREF_SIGNAL_WORDS = {
+            "rule", "rules", "preference", "setting", "configured",
+            "should", "allowed", "policy", "default", "location",
+            "timezone", "where", "how",
+        }
+        if event_type != "user_preference":
+            try:
+                query_words_lower = {w.lower().rstrip("?.,!") for w in query_text.split() if len(w) > 1}
+                if query_words_lower & _PREF_SIGNAL_WORDS:
+                    result_ids = {n.id for n in results}
+                    pref_nodes = db.get_by_type("user_preference", limit=20)
+                    matching_prefs = []
+                    if pref_nodes:
+                        query_words = {w.lower() for w in query_text.split() if len(w) > 2}
+                        for pn in pref_nodes:
+                            if pn.id in result_ids:
+                                continue
+                            if (pn.metadata or {}).get("superseded"):
+                                continue
+                            content_words = {w.lower() for w in pn.content.split() if len(w) > 2}
+                            if query_words & content_words:
+                                matching_prefs.append(pn)
+                    if matching_prefs:
+                        output += "\n---\n**User Preferences:**\n"
+                        for pr in matching_prefs[:3]:
+                            preview = pr.content[:150]
+                            output += f"- [`{pr.id}`] {preview}\n"
+            except Exception as e:
+                logger.debug("Preference injection failed: %s", e)
 
         # Warn if embedding model is degraded (hash fallback active)
         try:
             from omega.embedding import is_embedding_degraded
             if is_embedding_degraded() and results:
                 output += "\n**Note:** Semantic search is degraded (embedding model unavailable). Results are text-match only.\n"
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("Embedding degradation check failed: %s", e)
 
         logger.info(f"Query '{query_text[:30]}...' returned {len(results)} results")
         return output
@@ -1441,12 +1965,17 @@ def query_structured(
     entity_id: Optional[str] = None,
     agent_type: Optional[str] = None,
     surfacing_context: Optional["SurfacingContext"] = None,
+    strength_min: Optional[float] = None,
+    memory_type: Optional[str] = None,
+    include_contradicted: bool = False,
+    valid_at: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Query memories and return structured dicts (machine-readable)."""
     db = _get_store()
 
     try:
         effective_temporal = temporal_range or _infer_temporal_range(query_text)
+        _temporal_boost_only = temporal_range is None and effective_temporal is not None
 
         enhanced = query_text
         if event_type:
@@ -1454,18 +1983,21 @@ def query_structured(
         if project:
             enhanced = f"{Path(project).name} {enhanced}"
 
-        results = db.query(
-            enhanced,
-            limit=limit * 2 if (filter_tags or entity_id or agent_type) else limit,
-            session_id=session_id,
-            context_file=context_file or "",
-            context_tags=context_tags,
-            temporal_range=effective_temporal,
-            entity_id=entity_id,
-            agent_type=agent_type,
-            query_hint=event_type,
-            surfacing_context=surfacing_context,
-        )
+        query_kwargs_s: Dict[str, Any] = {
+            "limit": limit * 2 if (filter_tags or entity_id or agent_type) else limit,
+            "session_id": session_id,
+            "context_file": context_file or "",
+            "context_tags": context_tags,
+            "temporal_range": effective_temporal,
+            "entity_id": entity_id,
+            "agent_type": agent_type,
+            "query_hint": event_type,
+            "surfacing_context": surfacing_context,
+            "temporal_boost_only": _temporal_boost_only,
+        }
+        if valid_at:
+            query_kwargs_s["valid_at"] = valid_at
+        results = db.query(enhanced, **query_kwargs_s)
 
         if event_type and results:
             results = [r for r in results if (r.metadata or {}).get("event_type") == event_type]
@@ -1477,7 +2009,19 @@ def query_structured(
                 r for r in results if filter_set.issubset({str(t).lower() for t in (r.metadata or {}).get("tags", [])})
             ]
 
+        # Filter by memory_type
+        if memory_type and results:
+            results = [r for r in results if (r.metadata or {}).get("memory_type") == memory_type]
+
+        # Filter to only contradicted memories
+        if include_contradicted and results:
+            results = [r for r in results if (r.metadata or {}).get("contradicted_by")]
+
         results = results[:limit]
+
+        # Filter by minimum strength score
+        if strength_min is not None and strength_min > 0:
+            results = [r for r in results if getattr(r, "strength", 0.0) >= strength_min]
 
         structured = []
         for node in results:
@@ -1491,8 +2035,83 @@ def query_structured(
                     "tags": (node.metadata or {}).get("tags", []),
                     "metadata": node.metadata,
                     "relevance": getattr(node, "relevance", 0.0),
+                    "_query_confidence": (node.metadata or {}).get("_query_confidence", 0.0),
+                    "strength": round(getattr(node, "strength", 0.0), 3),
+                    "valid_from": node.valid_from.isoformat() if hasattr(node, "valid_from") and node.valid_from else None,
+                    "valid_until": node.valid_until.isoformat() if hasattr(node, "valid_until") and node.valid_until else None,
                 }
             )
+
+        # Auto-inject relevant constraints
+        if event_type != "constraint":
+            try:
+                result_ids = {node.id for node in results}
+                constraint_nodes = db.get_by_type("constraint", limit=10)
+                if constraint_nodes:
+                    query_words = {w.lower() for w in query_text.split() if len(w) > 2}
+                    injected = 0
+                    for cn in constraint_nodes:
+                        if cn.id in result_ids:
+                            continue
+                        if (cn.metadata or {}).get("superseded"):
+                            continue
+                        content_words = {w.lower() for w in cn.content.split() if len(w) > 2}
+                        if query_words & content_words:
+                            structured.insert(0, {
+                                "id": cn.id,
+                                "content": cn.content,
+                                "event_type": "constraint",
+                                "session_id": (cn.metadata or {}).get("session_id", ""),
+                                "created_at": cn.created_at.isoformat() if cn.created_at else "",
+                                "tags": (cn.metadata or {}).get("tags", []),
+                                "metadata": cn.metadata,
+                                "relevance": getattr(cn, "relevance", 0.0),
+                                "is_constraint": True,
+                            })
+                            injected += 1
+                            if injected >= 3:
+                                break
+            except Exception as e:
+                logger.debug("Constraint injection failed (structured): %s", e)
+
+        # Auto-inject relevant user preferences for preference-intent queries
+        _PREF_SIGNAL_WORDS_S = {
+            "rule", "rules", "preference", "setting", "configured",
+            "should", "allowed", "policy", "default", "location",
+            "timezone", "where", "how",
+        }
+        if event_type != "user_preference":
+            try:
+                query_words_lower = {w.lower().rstrip("?.,!") for w in query_text.split() if len(w) > 1}
+                if query_words_lower & _PREF_SIGNAL_WORDS_S:
+                    result_ids = {node.id for node in results}
+                    pref_nodes = db.get_by_type("user_preference", limit=20)
+                    if pref_nodes:
+                        query_words = {w.lower() for w in query_text.split() if len(w) > 2}
+                        injected = 0
+                        for pn in pref_nodes:
+                            if pn.id in result_ids:
+                                continue
+                            if (pn.metadata or {}).get("superseded"):
+                                continue
+                            content_words = {w.lower() for w in pn.content.split() if len(w) > 2}
+                            if query_words & content_words:
+                                structured.insert(0, {
+                                    "id": pn.id,
+                                    "content": pn.content,
+                                    "event_type": "user_preference",
+                                    "session_id": (pn.metadata or {}).get("session_id", ""),
+                                    "created_at": pn.created_at.isoformat() if pn.created_at else "",
+                                    "tags": (pn.metadata or {}).get("tags", []),
+                                    "metadata": pn.metadata,
+                                    "relevance": getattr(pn, "relevance", 0.0),
+                                    "is_preference": True,
+                                })
+                                injected += 1
+                                if injected >= 3:
+                                    break
+            except Exception as e:
+                logger.debug("Preference injection failed (structured): %s", e)
 
         return structured
 
@@ -1502,15 +2121,13 @@ def query_structured(
 
 
 # ---------------------------------------------------------------------------
-# Welcome cache -- avoids redundant DB queries across rapid session starts
-# ---------------------------------------------------------------------------
-_welcome_cache: Dict[str, tuple] = {}  # key -> (monotonic_time, result)
-_WELCOME_CACHE_TTL = 30  # seconds
-
-
-# ---------------------------------------------------------------------------
 # Public API -- Welcome / Session Bootstrap
 # ---------------------------------------------------------------------------
+
+# Welcome cache — keyed by (project or ""), stores (timestamp, result).
+# Avoids 10+ DB round-trips on every session start (daemon serves many sessions).
+_welcome_cache: Dict[str, tuple] = {}  # key -> (monotonic_ts, result_dict)
+_WELCOME_CACHE_TTL = 30.0  # seconds
 
 
 def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> Dict[str, Any]:
@@ -1518,26 +2135,48 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
 
     Returns observation_prefix (grouped by type) and project_context
     for Claude to reference throughout the session.
+
+    Uses a 30s cache to avoid 10+ DB round-trips when multiple sessions
+    start in quick succession (common with HTTP daemon transport).
     """
-    # Fast-path: return cached result if recent enough
-    cache_key = f"{session_id or ''}:{project or ''}"
-    now_mono = _time.monotonic()
-    cached = _welcome_cache.get(cache_key)
-    if cached and (now_mono - cached[0]) < _WELCOME_CACHE_TTL:
-        return cached[1]
+    import time as _time_mod
+
+    cache_key = project or ""
+    now_mono = _time_mod.monotonic()
+
+    # Fast path: return cached result if fresh
+    if cache_key in _welcome_cache:
+        cached_ts, cached_result = _welcome_cache[cache_key]
+        if now_mono - cached_ts < _WELCOME_CACHE_TTL:
+            # Update memory_count (cheap) so it's current
+            try:
+                db = _get_store()
+                cached_result["memory_count"] = db.node_count()
+            except Exception:
+                pass
+            return dict(cached_result)  # shallow copy
 
     db = _get_store()
 
     # Get recent high-value memories (decisions, lessons, preferences, errors)
-    _HIGH_VALUE_TYPES = {"decision", "lesson_learned", "user_preference", "user_fact", "error_pattern"}
+    _HIGH_VALUE_TYPES = {"decision", "lesson_learned", "user_preference", "user_fact", "error_pattern", "constraint"}
     recent = []
+    recent_activity = []  # Last few memories of any type for freshness
     try:
-        candidates = db.get_recent(limit=100)
+        candidates = db.get_recent(limit=200)
         for node in candidates:
-            event_type = (node.metadata or {}).get("event_type", "")
+            meta = node.metadata or {}
+            # Skip superseded memories
+            if meta.get("superseded"):
+                continue
+            event_type = meta.get("event_type", "")
+            # Track recent activity (useful types only, up to 5)
+            _NOISE_TYPES = {"session_respawn"}
+            if len(recent_activity) < 5 and event_type not in _NOISE_TYPES:
+                recent_activity.append(node)
             if event_type in _HIGH_VALUE_TYPES:
                 recent.append(node)
-                if len(recent) >= 15:
+                if len(recent) >= 30:
                     break
         # If no high-value memories found, fall back to most recent of any type
         if not recent:
@@ -1554,25 +2193,66 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
             try:
                 from omega.entity.engine import resolve_project_entity
                 _entity_id = resolve_project_entity(project)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Welcome entity resolution failed: %s", e)
         recent_ids = {n.id for n in recent}
-        for _type in ("user_preference", "user_fact"):
-            type_nodes = db.get_by_type(_type, limit=5, entity_id=_entity_id)
-            for node in type_nodes:
-                if (node.metadata or {}).get("superseded"):
-                    continue
-                if node.id not in recent_ids:
-                    recent.append(node)
-                    recent_ids.add(node.id)
+        _welcome_types = ("user_preference", "user_fact", "decision", "task_completion", "checkpoint", "session_summary", "behavioral_pattern")
+        _limit_per_type = 8
+        # Batch query: fetch all 7 types in one SQL call instead of 7 separate queries
+        _placeholders = ",".join("?" for _ in _welcome_types)
+        if _entity_id:
+            _batch_rows = db._conn.execute(
+                f"""SELECT node_id, content, metadata, created_at,
+                          access_count, last_accessed, ttl_seconds, event_type
+                   FROM memories WHERE event_type IN ({_placeholders})
+                   AND (entity_id = ? OR entity_id IS NULL)
+                   ORDER BY event_type, created_at DESC""",
+                (*_welcome_types, _entity_id),
+            ).fetchall()
+        else:
+            _batch_rows = db._conn.execute(
+                f"""SELECT node_id, content, metadata, created_at,
+                          access_count, last_accessed, ttl_seconds, event_type
+                   FROM memories WHERE event_type IN ({_placeholders})
+                   ORDER BY event_type, created_at DESC""",
+                _welcome_types,
+            ).fetchall()
+        # Group by event_type and apply per-type limit
+        _type_counts: Dict[str, int] = {}
+        for row in _batch_rows:
+            _et = row[7]  # event_type column
+            _type_counts.setdefault(_et, 0)
+            if _type_counts[_et] >= _limit_per_type:
+                continue
+            _type_counts[_et] += 1
+            node = db._row_to_result(row[:7])
+            if (node.metadata or {}).get("superseded"):
+                continue
+            if node.id not in recent_ids:
+                recent.append(node)
+                recent_ids.add(node.id)
     except Exception as e:
         logger.debug("Welcome type-based enrichment failed: %s", e)
 
-    # Sort by priority (desc) then recency
+    # Sort by blended score: priority * 0.45 + recency * 0.35 + access_boost * 0.20
+    # Recency uses 3-day half-life so decisions from days ago aren't pushed out by noise
+    _now_ts = _time_mod.time()
+    def _recency_score(n):
+        if not n.created_at:
+            return 0.0
+        age_hours = (_now_ts - n.created_at.timestamp()) / 3600.0
+        return max(0.0, 1.0 / (1.0 + age_hours / 72.0))
+
+    import math as _math_mod
+    def _access_boost(n):
+        ac = n.access_count or 0
+        return min(_math_mod.log2(1 + ac), 5.0)
+
     recent.sort(
         key=lambda n: (
-            (n.metadata or {}).get("priority", 3),
-            n.created_at.isoformat() if n.created_at else "",
+            (n.metadata or {}).get("priority", 3) * 0.45
+            + _recency_score(n) * 5.0 * 0.35
+            + _access_boost(n) * 0.20
         ),
         reverse=True,
     )
@@ -1582,89 +2262,149 @@ def welcome(session_id: Optional[str] = None, project: Optional[str] = None) -> 
     try:
         grouped: Dict[str, List[str]] = {}
         type_labels = {
+            "constraint": "Active Constraints",
             "user_preference": "User Preferences",
             "user_fact": "User Context",
             "decision": "Active Decisions",
             "lesson_learned": "Key Lessons",
             "error_pattern": "Known Pitfalls",
+            "task_completion": "Recent Completions",
+            "checkpoint": "Saved Checkpoints",
+            "session_summary": "Session History",
+            "behavioral_pattern": "Behavioral Patterns",
+            "project_status": "Project Status",
         }
-        for n in recent[:15]:
+        for n in recent[:25]:
             etype = (n.metadata or {}).get("event_type", "")
             label = type_labels.get(etype)
             if not label:
                 continue
-            # Prefer observation over raw content
-            text = (n.metadata or {}).get("observation") or n.content[:150]
+            text = (n.metadata or {}).get("observation") or n.content[:300]
             if label not in grouped:
                 grouped[label] = []
-            if len(grouped[label]) < 5:
+            if len(grouped[label]) < 7:
                 grouped[label].append(text)
 
         if grouped:
-            sections = []
-            for label in ["User Preferences", "User Context", "Active Decisions", "Key Lessons", "Known Pitfalls"]:
+            _STABLE_LABELS = ["Project Status", "Active Constraints", "User Preferences", "User Context", "Active Decisions", "Key Lessons", "Known Pitfalls", "Behavioral Patterns"]
+            _VOLATILE_LABELS = ["Recent Completions", "Saved Checkpoints", "Session History"]
+
+            stable_sections = []
+            for label in _STABLE_LABELS:
+                items = grouped.get(label, [])
+                if items:
+                    items_sorted = sorted(items)
+                    section = f"### {label}\n"
+                    section += "\n".join(f"- {item}" for item in items_sorted)
+                    stable_sections.append(section)
+
+            volatile_sections = []
+            for label in _VOLATILE_LABELS:
                 items = grouped.get(label, [])
                 if items:
                     section = f"### {label}\n"
                     section += "\n".join(f"- {item}" for item in items)
-                    sections.append(section)
-            observation_prefix = "\n".join(sections)
+                    volatile_sections.append(section)
+
+            if recent_activity:
+                activity_items = []
+                for n in recent_activity:
+                    meta = n.metadata or {}
+                    etype = meta.get("event_type", "unknown")
+                    text = meta.get("observation") or n.content[:120]
+                    ts_str = n.created_at.strftime("%b %d %H:%M") if n.created_at else ""
+                    activity_items.append(f"- [{etype}] {ts_str}: {text}")
+                volatile_sections.append("### Recent Activity\n" + "\n".join(activity_items))
+
+            all_sections = stable_sections
+            if volatile_sections:
+                if stable_sections:
+                    all_sections = stable_sections + ["<!-- omega:cache_breakpoint -->"] + volatile_sections
+                else:
+                    all_sections = volatile_sections
+            observation_prefix = "\n".join(all_sections)
     except Exception as e:
         logger.debug("Welcome observation_prefix failed: %s", e)
 
-    # Build project_context (lightweight — no embedding search)
+    # Build project_context — skip expensive embedding search (db.query) on fast path.
+    # Use only direct type lookups and coordination queries.
     project_context = ""
+    _entity_id = None
     if project:
         try:
-            proj_nodes = [
-                n for n in recent
-                if (n.metadata or {}).get("project") == project
+            from omega.entity.engine import resolve_project_entity
+            _entity_id = resolve_project_entity(project)
+        except Exception:
+            pass
+
+        # Surface latest project_status snapshot
+        try:
+            status_nodes = db.get_by_type("project_status", limit=3, entity_id=_entity_id)
+            project_statuses = [
+                n for n in status_nodes
+                if (n.metadata or {}).get("project", "") == project
             ]
-            if proj_nodes:
-                items = []
-                for m in proj_nodes[:5]:
-                    text = (m.metadata or {}).get("observation") or m.content[:120]
-                    items.append(f"- {text}")
-                project_context = f"### Project: {Path(project).name}\n" + "\n".join(items)
+            if project_statuses:
+                latest = project_statuses[0]
+                text = latest.content[:400]
+                project_context = f"### Project Status\n- {text}\n\n"
         except Exception as e:
-            logger.debug("Welcome project_context failed: %s", e)
+            logger.debug("Welcome project_status query failed: %s", e)
 
-    # NOTE: Predictive prefetch removed — caused write contention with
-    # deferred startup thread. Access counts updated on actual queries.
+        # Surface active coordination decisions for this project
+        try:
+            from omega.coordination import get_manager
+            cm = get_manager()
+            coord_decs = cm.query_decisions(project=project, status="active", limit=5)
+            if coord_decs:
+                dec_items = []
+                for d in coord_decs:
+                    dec_text = f"[{d['domain']}] {d['decision'][:200]}"
+                    dec_items.append(f"- {dec_text}")
+                if dec_items:
+                    project_context += "\n### Coordination Decisions\n" + "\n".join(dec_items)
+        except Exception as e:
+            logger.debug("Welcome coord_decisions query failed: %s", e)
 
-    profile = get_profile()
     node_count = db.node_count()
 
-    # Check for missing embedding model files (not backend activation — model is lazy-loaded)
-    warnings = []
-    from omega.embedding import _get_onnx_model_dir, has_onnx_runtime, has_sentence_transformers
-    if has_onnx_runtime() and _get_onnx_model_dir() is None and not has_sentence_transformers():
-        warnings.append(
-            "Embedding model not found — semantic search will be disabled. "
-            "Run 'omega setup' to download the model (~90 MB)."
-        )
+    # Dedup stats summary (in-memory, cheap)
+    dedup_prevented = 0
+    try:
+        dedup_prevented = db.stats.get("content_dedup_skips", 0) + db.stats.get("embedding_dedup_skips", 0)
+    except Exception:
+        pass
 
     result = {
-        "greeting": f"Welcome back! You have {node_count} memories stored.",
+        "memory_count": node_count,
         "recent_memories": [
             {
-                "id": n.id,
-                "content": n.content[:200],
+                "id": n.id[:12],
+                "content": n.content[:400],
                 "type": (n.metadata or {}).get("event_type", "unknown"),
-                "created_at": str(n.created_at),
-                "relative_time": _relative_time(n.created_at),
             }
             for n in recent[:5]
         ],
         "observation_prefix": observation_prefix,
         "project_context": project_context,
-        "profile": profile,
-        "memory_count": node_count,
     }
-    if warnings:
-        result["warnings"] = warnings
+
+    if dedup_prevented > 0:
+        result["duplicates_prevented"] = dedup_prevented
+
+    # NOTE: access_count bumps, behavioral reinforcement, and predictive
+    # prefetch removed from welcome() — they caused 60s of DB write
+    # contention when the deferred startup thread holds the write lock.
+    # Access counts are still updated on actual queries (omega_query).
+
+    # NOTE: Supplementary enrichments (weekly digest, advisor suggestions)
+    # removed from welcome() hot path — they trigger query_structured which
+    # needs embedding computation + SQLite vector search, blocking 100s+ when
+    # the deferred startup thread holds the DB lock during integrity_check.
+    # Advisor data is surfaced via the hook system's [HANDOFF] blocks instead.
 
     _welcome_cache[cache_key] = (now_mono, result)
+
     return result
 
 
@@ -1686,7 +2426,8 @@ def get_session_context(
     try:
         health = db.check_memory_health()
         health_status = health.get("status", "ok")
-    except Exception:
+    except Exception as e:
+        logger.warning("Health check failed: %s", e)
         health_status = "unknown"
 
     # Last capture time
@@ -1695,41 +2436,136 @@ def get_session_context(
         recent_all = db.get_recent(limit=1)
         if recent_all:
             last_capture_ago = _relative_time(recent_all[0].created_at)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug("Last capture time query failed: %s", e)
 
     # Gather typed high-value items for [CONTEXT] section
+    from omega.types import STABLE_EVENT_TYPES
     _TYPE_TAG = {
+        "constraint": "RULE",
         "user_preference": "PREF",
         "decision": "DECISION",
         "lesson_learned": "LESSON",
         "error_pattern": "PITFALL",
     }
     context_items: list[Dict[str, str]] = []
+
+    # Always-surface constraints (separate budget, not recency-dependent)
     try:
+        constraint_nodes = db.get_by_type("constraint", limit=10)
+        for node in constraint_nodes:
+            if (node.metadata or {}).get("superseded"):
+                continue
+            text = (node.metadata or {}).get("observation") or node.content[:300]
+            text = text.replace("\n", " ").strip()
+            context_items.append({"tag": "RULE", "text": text, "stability": "stable"})
+            if len(context_items) >= 3:
+                break
+    except Exception as e:
+        logger.debug("Constraint surfacing failed: %s", e)
+
+    # Regular high-value items (separate budget from constraints)
+    # Velocity-adaptive freshness: measure memories/day, adjust window accordingly
+    try:
+        from datetime import datetime as _dt_ctx, timedelta as _td_ctx, timezone as _tz_ctx
         candidates = db.get_recent(limit=100)
-        seen_tags: Dict[str, int] = {}
+        _now_ctx = _dt_ctx.now(_tz_ctx.utc)
+
+        # Compute velocity: count high-value memories in last 24h
+        _24h_ago_check = _now_ctx - _td_ctx(hours=24)
+        _velocity = 0
         for node in candidates:
+            try:
+                ca = node.created_at
+                if isinstance(ca, str):
+                    dt = _dt_ctx.fromisoformat(ca.replace("Z", "+00:00"))
+                else:
+                    dt = _dt_ctx.fromtimestamp(ca, tz=_tz_ctx.utc)
+                if dt >= _24h_ago_check:
+                    _velocity += 1
+            except (ValueError, TypeError, OSError):
+                pass
+
+        # Adaptive windows based on velocity
+        if _velocity >= 15:
+            # High velocity: tight 12h fresh window
+            _fresh_cutoff = _now_ctx - _td_ctx(hours=12)
+            _recent_cutoff = _now_ctx - _td_ctx(hours=36)
+        elif _velocity >= 5:
+            # Moderate velocity: 24h fresh window
+            _fresh_cutoff = _now_ctx - _td_ctx(hours=24)
+            _recent_cutoff = _now_ctx - _td_ctx(hours=72)
+        else:
+            # Low velocity: wider 72h fresh window
+            _fresh_cutoff = _now_ctx - _td_ctx(hours=72)
+            _recent_cutoff = _now_ctx - _td_ctx(hours=168)
+
+        def _node_age_bucket(node):
+            """Return 0 (fresh), 1 (recent), 2 (stale) based on velocity-adaptive windows."""
+            try:
+                ca = node.created_at
+                if isinstance(ca, str):
+                    dt = _dt_ctx.fromisoformat(ca.replace("Z", "+00:00"))
+                else:
+                    dt = _dt_ctx.fromtimestamp(ca, tz=_tz_ctx.utc)
+                if dt >= _fresh_cutoff:
+                    return 0
+                elif dt >= _recent_cutoff:
+                    return 1
+                return 2
+            except (ValueError, TypeError, OSError):
+                return 2
+
+        # Sort candidates: fresh first, then recent, then stale
+        candidates_sorted = sorted(candidates, key=_node_age_bucket)
+
+        seen_tags: Dict[str, int] = {}
+        regular_count = 0
+        for node in candidates_sorted:
             etype = (node.metadata or {}).get("event_type", "")
+            if etype == "constraint":
+                continue  # Already handled above
             tag = _TYPE_TAG.get(etype)
             if not tag:
                 continue
             if seen_tags.get(tag, 0) >= 2:
                 continue
-            text = (node.metadata or {}).get("observation") or node.content[:150]
+            text = (node.metadata or {}).get("observation") or node.content[:300]
             text = text.replace("\n", " ").strip()
-            context_items.append({"tag": tag, "text": text})
+            _stability = "stable" if etype in STABLE_EVENT_TYPES else "volatile"
+            context_items.append({"tag": tag, "text": text, "stability": _stability})
             seen_tags[tag] = seen_tags.get(tag, 0) + 1
-            if len(context_items) >= limit:
+            regular_count += 1
+            if regular_count >= limit:
                 break
     except Exception as e:
         logger.debug("get_session_context context_items failed: %s", e)
+
+    # Type breakdown for stats line
+    type_stats: Dict[str, int] = {}
+    try:
+        type_stats = db.get_type_stats()
+    except Exception as e:
+        logger.debug("get_session_context type_stats failed: %s", e)
+
+    # Count memories added in last 7 days
+    period_new_7d = 0
+    try:
+        cutoff_7d = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        row = db._conn.execute(
+            "SELECT COUNT(*) FROM memories WHERE created_at >= ?", (cutoff_7d,)
+        ).fetchone()
+        period_new_7d = row[0] if row else 0
+    except Exception as e:
+        logger.debug("get_session_context period_new_7d failed: %s", e)
 
     return {
         "memory_count": node_count,
         "health_status": health_status,
         "last_capture_ago": last_capture_ago or "unknown",
         "context_items": context_items,
+        "type_stats": type_stats,
+        "period_new_7d": period_new_7d,
     }
 
 
@@ -1748,27 +2584,21 @@ def check_health(
     health = db.check_memory_health(warn_mb=warn_mb, critical_mb=critical_mb, max_nodes=max_nodes)
 
     status_label = health.get("status", "unknown").upper()
-    output = "# OMEGA Health Check\n\n"
-    output += f"**Status:** {status_label}\n"
-    output += f"**Memory:** {health.get('memory_mb', 0):.1f} MB\n"
-    output += f"**DB Size:** {health.get('db_size_mb', 0):.2f} MB\n"
-    output += f"**Nodes:** {health.get('node_count', 0)}\n\n"
+    parts = [
+        f"Status: {status_label} | Mem: {health.get('memory_mb', 0):.1f}MB"
+        f" | DB: {health.get('db_size_mb', 0):.2f}MB"
+        f" | Nodes: {health.get('node_count', 0)}",
+    ]
 
     warnings = health.get("warnings", [])
     if warnings:
-        output += "## Warnings\n"
-        for w in warnings:
-            output += f"- {w}\n"
-        output += "\n"
+        parts.append("Warnings: " + "; ".join(warnings))
 
     recommendations = health.get("recommendations", [])
     if recommendations:
-        output += "## Recommendations\n"
-        for r in recommendations:
-            output += f"- {r}\n"
-        output += "\n"
+        parts.append("Recs: " + "; ".join(recommendations))
 
-    return output
+    return "\n".join(parts) + "\n"
 
 
 def status() -> Dict[str, Any]:
@@ -1796,7 +2626,7 @@ def get_dedup_stats() -> Dict[str, Any]:
     """Return deduplication statistics."""
     db = _get_store()
     return {
-        "content_dedup_skips": db.stats.get("content_dedup_skips", 0),
+        "content_dedup_skips": db.stats.get("dedup_canonical", 0) + db.stats.get("dedup_exact", 0),
         "memory_evolutions": db.stats.get("memory_evolutions", 0),
         "embedding_dedup_skips": db.stats.get("embedding_dedup_skips", 0),
         "node_count": db.node_count(),
@@ -1885,14 +2715,12 @@ def deduplicate(
     merged_into: Dict[str, str] = {}
     groups: Dict[str, list] = {}
 
-    for i in range(len(node_words)):
-        node_i, words_i = node_words[i]
+    for i, (node_i, words_i) in enumerate(node_words):
         if node_i.id in merged_into or not words_i:
             continue
 
         group = [node_i]
-        for j in range(i + 1, len(node_words)):
-            node_j, words_j = node_words[j]
+        for node_j, words_j in node_words[i + 1:]:
             if node_j.id in merged_into or not words_j:
                 continue
             intersection = len(words_i & words_j)
@@ -2137,6 +2965,205 @@ def get_cross_session_lessons(
 
 
 # ---------------------------------------------------------------------------
+# Public API -- Trajectory Distillation
+# ---------------------------------------------------------------------------
+
+
+def _get_event_type(m) -> str:
+    """Extract event_type from a memory (dict or MemoryResult)."""
+    if isinstance(m, dict):
+        return m.get("event_type", "unknown")
+    return getattr(m, "event_type", "unknown")
+
+
+def _get_content(m) -> str:
+    """Extract content from a memory (dict or MemoryResult)."""
+    if isinstance(m, dict):
+        return m.get("content", "")
+    return getattr(m, "content", "") or ""
+
+
+def _safe_meta(m) -> dict:
+    """Extract metadata dict from a memory (dict or MemoryResult)."""
+    if isinstance(m, dict):
+        meta = m.get("metadata", {})
+    else:
+        meta = getattr(m, "metadata", {})
+    if isinstance(meta, str):
+        try:
+            return json.loads(meta)
+        except Exception:
+            return {}
+    return meta or {}
+
+
+def distill_trajectory(session_id: str) -> Optional[str]:
+    """Distill a session's memory trajectory into a reusable skill template.
+
+    Called at session stop. Returns the stored node_id, or None if the session
+    didn't pass the quality gate or distillation failed.
+
+    Fail-open: any error results in None (no skill stored), never blocks session stop.
+    """
+    import json as _json
+
+    try:
+        db = _get_store()
+        memories = db.get_by_session(session_id, limit=50)
+
+        # Quality gate: minimum 3 memories
+        if len(memories) < 3:
+            logger.debug("distill_trajectory: skipped session %s (only %d memories)", session_id, len(memories))
+            return None
+
+        # Quality gate: must have task_completion event type OR a commit in metadata
+        has_completion = any(
+            _get_event_type(m) == "task_completion"
+            for m in memories
+        )
+        has_commit = any(
+            _safe_meta(m).get("commit")
+            for m in memories
+        )
+        if not has_completion and not has_commit:
+            logger.debug("distill_trajectory: skipped session %s (no completion/commit)", session_id)
+            return None
+
+        # Gather trajectory context (chronological — oldest first)
+        memories = list(reversed(memories))  # get_by_session returns DESC
+        mem_lines = []
+        for m in memories:
+            et = _get_event_type(m)
+            content = _get_content(m)[:200]
+            mem_lines.append(f"- [{et}] {content}")
+
+        trajectory_text = "\n".join(mem_lines[:20])  # Cap at 20 entries
+
+        # Gather tool sequence from coord_audit if available
+        tool_sequence = ""
+        try:
+            from omega.coordination import get_manager
+            mgr = get_manager()
+            if mgr:
+                audit_rows = mgr._conn.execute(
+                    "SELECT tool_name, result_status FROM coord_audit "
+                    "WHERE session_id = ? ORDER BY call_index ASC LIMIT 30",
+                    (session_id,),
+                ).fetchall()
+                if audit_rows:
+                    tools = [f"{r[0]}({'ok' if r[1] == 'ok' else 'err'})" for r in audit_rows]
+                    tool_sequence = f"\nTool sequence: {' → '.join(tools)}"
+        except Exception:
+            pass  # Coordination unavailable — continue without tool sequence
+
+        # LLM distillation call
+        system_prompt = (
+            "You extract reusable skill templates from agent work sessions. "
+            "Output valid JSON only, no markdown fencing."
+        )
+        user_prompt = f"""Analyze this agent session and extract a reusable skill template.
+
+Memory sequence (chronological):
+{trajectory_text}
+{tool_sequence}
+
+Extract a JSON skill template:
+{{
+  "skill_type": "debugging|feature|refactor|config|deploy",
+  "summary": "One sentence describing the workflow in imperative form",
+  "steps": ["verb_phrase_1", "verb_phrase_2", ...],
+  "key_insight": "The most important actionable lesson from this session",
+  "tools_used": ["Tool1", "Tool2"],
+  "files_involved": ["path1", "path2"],
+  "outcome": "success|partial|failed_then_recovered"
+}}
+
+Rules:
+- Steps should be abstract enough to transfer (not "edit auth.py line 42" but "apply null-safe fix")
+- key_insight should be actionable advice, not a description
+- 3-7 steps maximum
+- If the session is too routine or trivial to extract a skill, return {{"skip": true}}"""
+
+        raw = llm_complete(
+            prompt=user_prompt,
+            system=system_prompt,
+            max_tokens=512,
+            temperature=0.0,
+            timeout=10.0,
+            model_tier="fast",
+        )
+
+        if not raw:
+            logger.debug("distill_trajectory: LLM returned empty for session %s", session_id)
+            return None
+
+        # Parse JSON (strip markdown fencing if present)
+        cleaned = raw.strip()
+        if cleaned.startswith("```"):
+            cleaned = "\n".join(cleaned.split("\n")[1:])
+        if cleaned.endswith("```"):
+            cleaned = cleaned.rsplit("```", 1)[0]
+        cleaned = cleaned.strip()
+
+        try:
+            skill = _json.loads(cleaned)
+        except _json.JSONDecodeError:
+            logger.debug("distill_trajectory: malformed JSON from LLM for session %s", session_id)
+            return None
+
+        # Handle skip response
+        if skill.get("skip"):
+            logger.debug("distill_trajectory: LLM said skip for session %s", session_id)
+            return None
+
+        # Validate required fields
+        required = ("skill_type", "summary", "steps", "key_insight")
+        if not all(skill.get(k) for k in required):
+            logger.debug("distill_trajectory: missing required fields for session %s", session_id)
+            return None
+
+        # Build content string (human-readable)
+        steps_str = " → ".join(skill["steps"])
+        files_str = ", ".join(skill.get("files_involved", [])[:5])
+        content = (
+            f"{skill['summary']}. "
+            f"Steps: {steps_str}. "
+            f"Insight: {skill['key_insight']}"
+        )
+        if files_str:
+            content += f". Files: {files_str}"
+
+        # Build metadata
+        meta = {
+            "source": "trajectory_distillation",
+            "session_id": session_id,
+            "skill_type": skill["skill_type"],
+            "steps": skill["steps"],
+            "tools_used": skill.get("tools_used", []),
+            "files_involved": skill.get("files_involved", []),
+            "key_insight": skill["key_insight"],
+            "outcome": skill.get("outcome", "success"),
+            "memory_count": len(memories),
+            "distillation_model": "haiku",
+        }
+
+        node_id = auto_capture(
+            content=content,
+            event_type="skill_template",
+            metadata=meta,
+            session_id=session_id,
+        )
+
+        logger.info("distill_trajectory: distilled %s skill from session %s → %s",
+                     skill["skill_type"], session_id, node_id)
+        return node_id
+
+    except Exception as e:
+        logger.debug("distill_trajectory: failed for session %s: %s", session_id, e)
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Public API -- Constraint Enforcement
 # ---------------------------------------------------------------------------
 
@@ -2369,7 +3396,8 @@ def reingest(
 
             try:
                 entry = json.loads(decrypt_line(line))
-            except Exception:
+            except Exception as e:
+                logger.debug("Import line parse failed at line %d: %s", line_num, e)
                 stats["errors"] += 1
                 continue
 
@@ -2426,6 +3454,79 @@ def record_feedback(
     """Record feedback on a surfaced memory."""
     db = _get_store()
     return db.record_feedback(node_id=memory_id, rating=rating, reason=reason)
+
+
+def batch_record_feedback(items: List[tuple]) -> int:
+    """Record feedback for multiple memories in a single transaction.
+
+    Each item is (node_id, rating, reason). Returns count of updated memories.
+    """
+    db = _get_store()
+    return db.batch_record_feedback(items)
+
+
+def _check_graduation(memory_id: str) -> Optional[str]:
+    """Check if a memory should graduate or decay based on diff-correlation history.
+
+    Graduation: memory was diff-correlated (positive) in 2+ feedback signals -> promote priority.
+    Decay: memory was surfaced 3+ times with zero correlation -> demote priority.
+
+    Reads from the feedback_signals list stored in memory metadata by record_feedback().
+
+    Returns "graduated", "decayed", or None.
+    """
+    db = _get_store()
+    try:
+        row = db._conn.execute(
+            "SELECT metadata FROM memories WHERE node_id = ?",
+            (memory_id,),
+        ).fetchone()
+
+        if not row or not row[0]:
+            return None
+
+        meta = json.loads(row[0]) if isinstance(row[0], str) else (row[0] or {})
+        signals = meta.get("feedback_signals", [])
+
+        if not signals:
+            return None
+
+        diff_positive = sum(
+            1 for s in signals
+            if s.get("rating") == "helpful" and s.get("reason") and "diff-correlated" in s["reason"]
+        )
+        surfaced_not_committed = sum(
+            1 for s in signals
+            if s.get("rating") == "unhelpful" and s.get("reason") and "not committed" in s["reason"]
+        )
+
+        if diff_positive >= 2:
+            # Graduate: boost priority
+            db._conn.execute(
+                "UPDATE memories SET priority = MIN(COALESCE(priority, 3) + 1, 5) WHERE node_id = ?",
+                (memory_id,),
+            )
+            db._conn.commit()
+            return "graduated"
+        elif surfaced_not_committed >= 3 and diff_positive == 0:
+            # Decay: reduce priority
+            db._conn.execute(
+                "UPDATE memories SET priority = MAX(COALESCE(priority, 3) - 1, 1) WHERE node_id = ?",
+                (memory_id,),
+            )
+            db._conn.commit()
+            return "decayed"
+
+        return None
+    except Exception as e:
+        logger.debug("_check_graduation failed for %s: %s", memory_id[:12], e)
+        return None
+
+
+def backfill_embeddings(batch_size: int = 50) -> dict:
+    """Backfill missing embeddings for memories not in memories_vec."""
+    db = _get_store()
+    return db.backfill_embeddings(batch_size=batch_size)
 
 
 # ---------------------------------------------------------------------------
@@ -2494,19 +3595,16 @@ def timeline(days: int = 7, limit_per_day: int = 10) -> str:
     db = _get_store()
     data = db.get_timeline(days=days, limit_per_day=limit_per_day)
     if not data:
-        return f"# Memory Timeline\n\nNo memories in the last {days} days."
+        return f"No memories in the last {days} days."
     total = sum(len(v) for v in data.values())
-    output = f"# Memory Timeline ({total} memories, last {days} days)\n\n"
+    output = f"Timeline ({total} memories, last {days}d)\n\n"
     for day in sorted(data.keys(), reverse=True):
         memories = data[day]
-        output += f"## {day} ({len(memories)} memories)\n\n"
+        output += f"{day} ({len(memories)})\n"
         for m in memories:
             etype = (m.metadata or {}).get("event_type", "memory")
-            tags = (m.metadata or {}).get("tags", [])
-            tag_str = f" [{', '.join(str(t) for t in tags[:3])}]" if tags else ""
             preview = m.content[:120].replace("\n", " ")
-            output += f"- **[{etype}]** {preview}{tag_str}\n"
-            output += f"  `{m.id[:12]}` · {m.created_at.strftime('%H:%M')}\n"
+            output += f"- [{etype}] {preview} ({m.id[:8]} {m.created_at.strftime('%H:%M')})\n"
         output += "\n"
     return output
 
@@ -2543,7 +3641,7 @@ def _auto_backup_before_consolidate():
         logger.warning(f"Auto-backup before consolidation failed: {e}")
 
 
-def consolidate(prune_days: int = 30, max_summaries: int = 50) -> str:
+def consolidate(prune_days: int = 14, max_summaries: int = 50) -> str:
     """Run memory consolidation: prune stale entries, cap summaries, clean edges.
 
     Returns formatted markdown report.
@@ -2563,6 +3661,8 @@ def consolidate(prune_days: int = 30, max_summaries: int = 50) -> str:
     output += f"- **Stale (0 access, >{prune_days}d old):** {stats.get('pruned_stale', 0)}\n"
     output += f"- **Session summaries (beyond cap of {max_summaries}):** {stats.get('pruned_summaries', 0)}\n"
     output += f"- **Orphaned edges:** {stats.get('pruned_edges', 0)}\n"
+    output += f"- **Strength-decayed:** {stats.get('decayed_memories', 0)}\n"
+    output += f"- **Merged entities:** {stats.get('merged_entities', 0)}\n"
 
     if removed == 0:
         output += "\n*Nothing to consolidate — memory store is clean.*\n"
@@ -2662,8 +3762,8 @@ def _smart_extract(cluster) -> str:
         bigram_counter: Counter = Counter()
         for node in cluster:
             words = [w.lower() for w in node.content.split() if len(w) > 3]
-            for i in range(len(words) - 1):
-                bigram_counter[(words[i], words[i + 1])] += 1
+            for w1, w2 in zip(words, words[1:]):
+                bigram_counter[(w1, w2)] += 1
         if bigram_counter:
             top_bigram, top_count = bigram_counter.most_common(1)[0]
             if top_count >= 3:  # Only if bigram appears in 3+ members
@@ -2691,7 +3791,14 @@ def compact(
     Returns formatted markdown report.
     """
     db = _get_store()
-    candidates = db.get_by_type(event_type, limit=500)
+    all_candidates = db.get_by_type(event_type, limit=500)
+    # Filter out superseded memories — these were already compacted into a
+    # consolidated node.  Re-including them causes nested "[Consolidated from]"
+    # prefixes and duplicate consolidated nodes.
+    candidates = [
+        n for n in all_candidates
+        if not (n.metadata or {}).get("superseded")
+    ]
 
     if len(candidates) < min_cluster_size:
         return (
@@ -2711,6 +3818,8 @@ def compact(
     clusters: List[List] = []
 
     for i in range(len(node_words)):
+        if len(assigned) >= len(node_words):
+            break  # All items assigned, no more clusters possible
         node_i, words_i = node_words[i]
         if node_i.id in assigned or not words_i:
             continue
@@ -2770,6 +3879,13 @@ def compact(
         output += "\n"
 
         if not dry_run:
+            # Strip any existing "[Consolidated from ...]" prefix from the
+            # extracted content to prevent nested consolidation headers.
+            consolidated = re.sub(
+                r"^(\[Consolidated from \d+ memories\]\s*)+",
+                "",
+                consolidated,
+            ).lstrip()
             # Prefix consolidated content to distinguish from originals (avoids dedup)
             compact_header = f"[Consolidated from {len(cluster)} memories] "
             compact_content = compact_header + consolidated
@@ -2793,13 +3909,18 @@ def compact(
             )
             db.update_node(new_id, access_count=total_access)
 
-            # Mark originals as superseded
+            # Mark originals as superseded + log to forgetting audit trail
             for node in cluster:
                 nmeta = dict(node.metadata or {})
                 nmeta["superseded"] = True
                 nmeta["superseded_by"] = new_id
                 nmeta["compacted_at"] = datetime.now(timezone.utc).isoformat()
                 db.update_node(node.id, metadata=nmeta)
+                db._log_forgetting_external(
+                    node.id, node.content, event_type,
+                    "compaction_superseded", {"superseded_by": new_id},
+                )
+                db.queue_cloud_delete_by_node_id(node.id)
 
             total_compacted += len(cluster)
             total_created += 1
@@ -2810,6 +3931,416 @@ def compact(
         output += f"**Would compact:** {sum(len(c) for c in clusters)} memories into {len(clusters)} nodes\n"
     else:
         output += f"**Compacted:** {total_compacted} memories into {total_created} consolidated nodes\n"
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Public API -- Active Connection Discovery (Consolidation Daemon)
+# ---------------------------------------------------------------------------
+
+
+def discover_connections(
+    lookback_hours: int = 24,
+    similarity_threshold: float = 0.70,
+    max_memories: int = 100,
+    max_connections_per_memory: int = 3,
+    dry_run: bool = False,
+) -> str:
+    """Actively discover and link related memories that aren't yet connected.
+
+    Scans recent memories, finds semantically similar ones that lack edges,
+    and creates 'related' edges between them. When cross-cutting patterns
+    are found (clusters spanning multiple event types), generates
+    advisor_insight entries.
+
+    This is the core of the active consolidation daemon — it generates
+    new knowledge from existing memories rather than just pruning.
+
+    Args:
+        lookback_hours: How far back to scan for unlinked memories.
+        similarity_threshold: Minimum cosine similarity to create an edge (0.0-1.0).
+        max_memories: Maximum memories to process per run.
+        max_connections_per_memory: Maximum new edges per memory.
+        dry_run: If True, report what would be linked without modifying.
+
+    Returns:
+        Formatted markdown report.
+    """
+    db = _get_store()
+
+    if not db._vec_available:
+        return "# Connection Discovery\n\nVector search unavailable — cannot discover connections.\n"
+
+    # Phase 1: Find recent memories without many edges
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=lookback_hours)).isoformat()
+    candidates = db._conn.execute(
+        """SELECT m.node_id, m.content, m.event_type, m.id, m.created_at,
+                  m.entity_id, m.status
+           FROM memories m
+           WHERE m.created_at > ?
+             AND (m.status IS NULL OR m.status = 'active')
+             AND m.event_type NOT IN ('session_summary', 'coordination_snapshot',
+                                       'session_respawn', 'code_chunk', 'file_summary')
+           ORDER BY m.created_at DESC
+           LIMIT ?""",
+        (cutoff, max_memories),
+    ).fetchall()
+
+    if not candidates:
+        return (
+            f"# Connection Discovery\n\n"
+            f"No recent active memories in the last {lookback_hours}h to analyze.\n"
+        )
+
+    # Phase 2: For each candidate, find similar memories and create edges
+    edges_created = 0
+    edges_skipped = 0
+    cross_type_clusters = []  # Track cross-type connections for insight generation
+
+    # Get existing edges for candidates to avoid redundant checks
+    candidate_ids = {c[0] for c in candidates}
+    existing_edges = set()
+    if candidate_ids:
+        placeholders = ",".join("?" * len(candidate_ids))
+        rows = db._conn.execute(
+            f"SELECT source_id, target_id FROM edges WHERE source_id IN ({placeholders}) OR target_id IN ({placeholders})",
+            list(candidate_ids) + list(candidate_ids),
+        ).fetchall()
+        for r in rows:
+            existing_edges.add((r[0], r[1]))
+            existing_edges.add((r[1], r[0]))  # Bidirectional check
+
+    report_lines = []
+
+    for node_id, content, event_type, rowid, created_at, entity_id, status in candidates:
+        # Get embedding for this memory
+        try:
+            emb_row = db._conn.execute(
+                "SELECT embedding FROM memories_vec WHERE rowid = ?", (rowid,)
+            ).fetchone()
+            if not emb_row:
+                continue
+        except Exception:
+            continue
+
+        # Find similar memories
+        import struct
+        _EMBED_DIM = 384
+        expected_size = _EMBED_DIM * 4  # 4 bytes per float
+        if len(emb_row[0]) != expected_size:
+            continue
+        embedding = list(struct.unpack(f"{_EMBED_DIM}f", emb_row[0]))
+        similar = db._vec_query(embedding, limit=max_connections_per_memory + 5)
+
+        connections_made = 0
+        for sim_rowid, distance in similar:
+            if connections_made >= max_connections_per_memory:
+                break
+
+            similarity = 1.0 - distance
+            if similarity < similarity_threshold:
+                continue
+
+            # Look up the similar memory
+            sim_row = db._conn.execute(
+                "SELECT node_id, event_type, content FROM memories WHERE id = ?",
+                (sim_rowid,),
+            ).fetchone()
+            if not sim_row or sim_row[0] == node_id:
+                continue
+
+            sim_node_id, sim_event_type, sim_content = sim_row
+
+            # Skip if edge already exists
+            if (node_id, sim_node_id) in existing_edges:
+                edges_skipped += 1
+                continue
+
+            # Create the edge
+            if not dry_run:
+                db.add_edge(
+                    source_id=node_id,
+                    target_id=sim_node_id,
+                    edge_type="related",
+                    weight=round(similarity, 3),
+                    metadata={"source": "discover_connections", "auto": True},
+                )
+
+            existing_edges.add((node_id, sim_node_id))
+            existing_edges.add((sim_node_id, node_id))
+            edges_created += 1
+            connections_made += 1
+
+            # Track cross-type connections for insight generation
+            if event_type != sim_event_type:
+                cross_type_clusters.append({
+                    "source_id": node_id,
+                    "source_type": event_type,
+                    "source_preview": content[:80],
+                    "target_id": sim_node_id,
+                    "target_type": sim_event_type,
+                    "target_preview": sim_content[:80],
+                    "similarity": round(similarity, 3),
+                })
+
+            report_lines.append(
+                f"  - `{node_id[:16]}` ({event_type}) ↔ `{sim_node_id[:16]}` "
+                f"({sim_event_type}) [{similarity:.0%}]"
+            )
+
+    # Phase 3: Generate insights from cross-type patterns
+    insights_generated = 0
+    insight_lines = []
+
+    if cross_type_clusters and not dry_run:
+        # Group cross-type connections by type pairs
+        type_pairs: Dict[tuple, list] = {}
+        for conn in cross_type_clusters:
+            pair = tuple(sorted([conn["source_type"], conn["target_type"]]))
+            type_pairs.setdefault(pair, []).append(conn)
+
+        # Generate insight for type pairs with 3+ connections
+        for pair, connections in type_pairs.items():
+            if len(connections) >= 3:
+                previews = [
+                    f"- {c['source_preview']}... ↔ {c['target_preview']}..."
+                    for c in connections[:5]
+                ]
+                insight_content = (
+                    f"Cross-cutting pattern: {len(connections)} connections discovered "
+                    f"between {pair[0]} and {pair[1]} memories.\n"
+                    f"Examples:\n" + "\n".join(previews)
+                )
+                try:
+                    auto_capture(
+                        content=insight_content,
+                        event_type="advisor_insight",
+                        metadata={
+                            "category": "system_insight",
+                            "source": "discover_connections",
+                            "type_pair": list(pair),
+                            "connection_count": len(connections),
+                        },
+                        entity_id="omega",
+                    )
+                    insights_generated += 1
+                    insight_lines.append(
+                        f"  - {pair[0]} ↔ {pair[1]}: {len(connections)} connections"
+                    )
+                except Exception as e:
+                    logger.debug("Failed to store cross-type insight: %s", e)
+
+    # Format report
+    mode = "(DRY RUN) " if dry_run else ""
+    output = f"# Connection Discovery {mode}Report\n\n"
+    output += f"**Scanned:** {len(candidates)} memories (last {lookback_hours}h)\n"
+    output += f"**New edges:** {edges_created}\n"
+    output += f"**Skipped (existing):** {edges_skipped}\n"
+    output += f"**Cross-type insights:** {insights_generated}\n\n"
+
+    if report_lines:
+        output += "## Connections\n"
+        output += "\n".join(report_lines[:30])
+        if len(report_lines) > 30:
+            output += f"\n  ... and {len(report_lines) - 30} more\n"
+        output += "\n\n"
+
+    if insight_lines:
+        output += "## Cross-Type Patterns\n"
+        output += "\n".join(insight_lines)
+        output += "\n\n"
+
+    if not report_lines and not insight_lines:
+        output += "*No new connections found. Memories are already well-linked or too diverse.*\n"
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Public API -- System Insight Synthesis
+# ---------------------------------------------------------------------------
+
+
+def synthesize_system_insights(
+    similarity_threshold: float = 0.50,
+    min_cluster_size: int = 3,
+    dry_run: bool = True,
+) -> str:
+    """Synthesize clusters of system insights into consolidated subsystem briefs.
+
+    Like compact() but scoped to advisor_insight memories with category=system_insight.
+    Consolidated nodes inherit the system_insight category and permanent TTL.
+
+    Args:
+        similarity_threshold: Jaccard similarity threshold for clustering (lower = broader clusters).
+        min_cluster_size: Minimum insights in a cluster to trigger synthesis.
+        dry_run: If True, report what would be synthesized without modifying anything.
+
+    Returns:
+        Formatted markdown report.
+    """
+    db = _get_store()
+    all_insights = db.get_by_type("advisor_insight", limit=500)
+
+    # Filter to system_insight category
+    candidates = []
+    for node in all_insights:
+        meta = node.metadata or {}
+        if meta.get("category") == "system_insight":
+            candidates.append(node)
+
+    if len(candidates) < min_cluster_size:
+        return (
+            f"# System Insight Synthesis\n\n"
+            f"Only {len(candidates)} system insights found "
+            f"(minimum cluster size: {min_cluster_size}). Nothing to synthesize.\n"
+        )
+
+    # Jaccard clustering (same algorithm as compact())
+    def _norm(text: str) -> set:
+        return {re.sub(r"[^\w]", "", w) for w in text.lower().split() if len(w) > 3}
+
+    node_words = [(node, _norm(node.content)) for node in candidates]
+    assigned: set = set()
+    clusters: List[List] = []
+
+    for i in range(len(node_words)):
+        if len(assigned) >= len(node_words):
+            break
+        node_i, words_i = node_words[i]
+        if node_i.id in assigned or not words_i:
+            continue
+
+        cluster = [node_i]
+        assigned.add(node_i.id)
+
+        for j in range(i + 1, len(node_words)):
+            node_j, words_j = node_words[j]
+            if node_j.id in assigned or not words_j:
+                continue
+            intersection = len(words_i & words_j)
+            union = len(words_i | words_j)
+            if union and (intersection / union) >= similarity_threshold:
+                cluster.append(node_j)
+                assigned.add(node_j.id)
+
+        if len(cluster) >= min_cluster_size:
+            clusters.append(cluster)
+
+    if not clusters:
+        return (
+            f"# System Insight Synthesis\n\n"
+            f"No clusters found with >= {min_cluster_size} similar system insights "
+            f"at {similarity_threshold:.0%} similarity. Insights are already diverse.\n"
+        )
+
+    output = f"# System Insight Synthesis {'(DRY RUN)' if dry_run else 'Report'}\n\n"
+    output += f"**System insights:** {len(candidates)}\n"
+    output += f"**Clusters found:** {len(clusters)}\n\n"
+
+    total_compacted = 0
+    total_created = 0
+
+    for ci, cluster in enumerate(clusters, 1):
+        cluster.sort(key=lambda n: len(n.content), reverse=True)
+        consolidated = _smart_extract(cluster)
+
+        # Merge tags from all cluster members
+        merged_tags: set = set()
+        total_access = 0
+        for node in cluster:
+            merged_tags.update(str(t) for t in (node.metadata or {}).get("tags", []))
+            total_access += getattr(node, "access_count", 0) or 0
+
+        # Identify primary subsystem from most common tag
+        primary_subsystem = max(merged_tags, key=lambda t: sum(
+            1 for n in cluster if t in (n.metadata or {}).get("tags", [])
+        )) if merged_tags else "general"
+
+        output += f"## Cluster {ci}: {primary_subsystem} ({len(cluster)} insights)\n\n"
+        output += f"**Summary:** {consolidated[:300]}...\n"
+        for node in cluster[:5]:
+            preview = node.content[:80]
+            output += f"- `{node.id[:12]}`: {preview}\n"
+        if len(cluster) > 5:
+            output += f"- ... and {len(cluster) - 5} more\n"
+        output += "\n"
+
+        if not dry_run:
+            compact_header = f"[Subsystem brief: {primary_subsystem}] "
+            compact_content = compact_header + consolidated
+
+            meta = {
+                "event_type": "advisor_insight",
+                "category": "system_insight",
+                "source": "insight_synthesis",
+                "subsystem": primary_subsystem,
+                "compacted_from": [n.id for n in cluster],
+                "compacted_count": len(cluster),
+                "tags": sorted(merged_tags)[:15],
+            }
+            new_id = db.store(
+                content=compact_content,
+                metadata=meta,
+                ttl_seconds=None,  # Permanent
+                skip_inference=True,
+            )
+            db.update_node(new_id, access_count=total_access)
+
+            # Mark originals as superseded
+            for node in cluster:
+                nmeta = dict(node.metadata or {})
+                nmeta["superseded"] = True
+                nmeta["superseded_by"] = new_id
+                nmeta["synthesized_at"] = datetime.now(timezone.utc).isoformat()
+                db.update_node(node.id, metadata=nmeta)
+                db._log_forgetting_external(
+                    node.id, node.content, "advisor_insight",
+                    "insight_synthesis_superseded", {"superseded_by": new_id},
+                )
+                db.queue_cloud_delete_by_node_id(node.id)
+
+            total_compacted += len(cluster)
+            total_created += 1
+            output += f"**Created:** `{new_id[:12]}` | **Superseded:** {len(cluster)} insights\n\n"
+
+    output += "---\n"
+    if dry_run:
+        output += f"**Would synthesize:** {sum(len(c) for c in clusters)} insights into {len(clusters)} subsystem briefs\n"
+    else:
+        output += f"**Synthesized:** {total_compacted} insights into {total_created} subsystem briefs\n"
+
+    return output
+
+
+# ---------------------------------------------------------------------------
+# Public API -- Forgetting Audit Trail
+# ---------------------------------------------------------------------------
+
+
+def forgetting_log(limit: int = 50, reason: Optional[str] = None) -> str:
+    """Retrieve the forgetting audit log as formatted markdown."""
+    db = _get_store()
+    entries = db.get_forgetting_log(limit=limit, reason=reason)
+
+    if not entries:
+        return "# Forgetting Log\n\nNo forgetting events recorded yet.\n"
+
+    output = "# Forgetting Log\n\n"
+    if reason:
+        output += f"**Filter:** reason = `{reason}`\n\n"
+    output += f"**Entries:** {len(entries)}\n\n"
+    output += "| Time | Reason | Type | Node | Preview |\n"
+    output += "|------|--------|------|------|---------|\n"
+
+    for entry in entries:
+        deleted = entry["deleted_at"][:19] if entry.get("deleted_at") else "?"
+        reason_str = entry.get("reason", "?")
+        et = entry.get("event_type", "") or ""
+        nid = entry.get("node_id", "")[:12]
+        preview = (entry.get("content_preview") or "")[:60].replace("|", "/").replace("\n", " ")
+        output += f"| {deleted} | `{reason_str}` | {et} | `{nid}` | {preview} |\n"
 
     return output
 
@@ -2902,7 +4433,7 @@ def phrase_search(
             for i, node in enumerate(results[:limit], 1):
                 ntype = (node.metadata or {}).get("event_type", "memory")
                 preview = node.content[:200] + "..." if len(node.content) > 200 else node.content
-                output += f"## {i}. [{ntype}] `{node.id[:12]}...`\n"
+                output += f"## {i}. [{ntype}] `{node.id}`\n"
                 output += f"{preview}\n"
                 tags = (node.metadata or {}).get("tags", [])
                 if tags:
@@ -2929,10 +4460,21 @@ def type_stats() -> Dict[str, int]:
     return db.get_type_stats()
 
 
+def stats_card_data() -> Dict[str, Any]:
+    """Get data for the shareable stats card display."""
+    db = _get_store()
+    return db.get_stats_card_data()
+
+
 def session_stats() -> Dict[str, int]:
     """Get memory counts grouped by session ID."""
     db = _get_store()
     return db.get_session_stats()
+
+
+def retrieval_context() -> List[Dict[str, Any]]:
+    """Return recent retrieval context entries for diagnostics."""
+    return _get_store().get_retrieval_context()
 
 
 def access_rate_stats() -> Dict[str, Any]:
@@ -2945,11 +4487,19 @@ def access_rate_stats() -> Dict[str, Any]:
     ).fetchone()[0]
     never_accessed_pct = (zero_access / total * 100) if total > 0 else 0
 
-    # Breakdown by event_type: avg access_count per type
+    # Retrieval count (semantic search hits) — separate from access_count
+    zero_retrieval = db._conn.execute(
+        "SELECT COUNT(*) FROM memories WHERE COALESCE(retrieval_count, 0) = 0"
+    ).fetchone()[0]
+    never_retrieved_pct = (zero_retrieval / total * 100) if total > 0 else 0
+
+    # Breakdown by event_type: avg access_count + retrieval_count per type
     type_rows = db._conn.execute(
         """SELECT event_type, COUNT(*) as cnt,
                   AVG(access_count) as avg_access,
-                  SUM(CASE WHEN access_count = 0 THEN 1 ELSE 0 END) as zero_cnt
+                  SUM(CASE WHEN access_count = 0 THEN 1 ELSE 0 END) as zero_cnt,
+                  AVG(COALESCE(retrieval_count, 0)) as avg_retrieval,
+                  SUM(CASE WHEN COALESCE(retrieval_count, 0) = 0 THEN 1 ELSE 0 END) as zero_retr_cnt
            FROM memories
            GROUP BY event_type
            ORDER BY avg_access DESC"""
@@ -2962,6 +4512,9 @@ def access_rate_stats() -> Dict[str, Any]:
             "avg_access_count": round(row[2], 2),
             "zero_access_count": row[3],
             "zero_access_pct": round(row[3] / row[1] * 100, 1) if row[1] > 0 else 0,
+            "avg_retrieval_count": round(row[4], 2),
+            "zero_retrieval_count": row[5],
+            "zero_retrieval_pct": round(row[5] / row[1] * 100, 1) if row[1] > 0 else 0,
         })
 
     # Top 10 most-accessed memories
@@ -2980,20 +4533,186 @@ def access_rate_stats() -> Dict[str, Any]:
             "event_type": row[3] or "unknown",
         })
 
-    # Overall average
-    avg_row = db._conn.execute(
-        "SELECT AVG(access_count) FROM memories"
-    ).fetchone()
-    avg_access = round(avg_row[0], 2) if avg_row[0] is not None else 0
+    # Overall average — computed from per-type aggregates (no extra query)
+    _total_count = sum(row[1] for row in type_rows)
+    avg_access = round(
+        sum(row[2] * row[1] for row in type_rows) / _total_count, 2
+    ) if _total_count else 0
 
     return {
         "total_memories": total,
         "zero_access_count": zero_access,
         "never_accessed_pct": round(never_accessed_pct, 1),
+        "zero_retrieval_count": zero_retrieval,
+        "never_retrieved_pct": round(never_retrieved_pct, 1),
         "avg_access_count": avg_access,
         "by_type": by_type,
         "top_accessed": top_accessed,
     }
+
+
+# ---------------------------------------------------------------------------
+# Public API -- Unified Diagnostic Report
+# ---------------------------------------------------------------------------
+
+
+def diagnostic_report(days: int = 30) -> Dict[str, Any]:
+    """Unified OMEGA health and value diagnostic.
+
+    Aggregates data from memory store, coordination audit, session tracking,
+    and LLM usage into a single report with a computed verdict.
+    """
+    report: Dict[str, Any] = {}
+
+    # --- 1. Memory Health ---------------------------------------------------
+    db = _get_store()
+    rate_stats = access_rate_stats()
+
+    # Velocity: memories created in last 7 days by event type
+    velocity_rows = db._conn.execute(
+        """SELECT event_type, COUNT(*) FROM memories
+           WHERE created_at > datetime('now', '-7 days')
+           GROUP BY event_type ORDER BY COUNT(*) DESC"""
+    ).fetchall()
+    velocity = [{"event_type": r[0], "count": r[1]} for r in velocity_rows]
+    week_total = sum(r[1] for r in velocity_rows)
+
+    # Dead memories: never accessed, older than 14 days
+    dead_row = db._conn.execute(
+        """SELECT COUNT(*) FROM memories
+           WHERE access_count = 0 AND created_at < datetime('now', '-14 days')"""
+    ).fetchone()
+    dead_count = dead_row[0] if dead_row else 0
+    total = rate_stats["total_memories"]
+    dead_pct = (dead_count / max(total, 1)) * 100
+
+    # Access buckets
+    bucket_row = db._conn.execute(
+        """SELECT
+             SUM(CASE WHEN access_count = 0 THEN 1 ELSE 0 END),
+             SUM(CASE WHEN access_count BETWEEN 1 AND 2 THEN 1 ELSE 0 END),
+             SUM(CASE WHEN access_count BETWEEN 3 AND 9 THEN 1 ELSE 0 END),
+             SUM(CASE WHEN access_count >= 10 THEN 1 ELSE 0 END)
+           FROM memories"""
+    ).fetchone()
+    access_buckets = {
+        "never": bucket_row[0] or 0,
+        "low_1_2": bucket_row[1] or 0,
+        "medium_3_9": bucket_row[2] or 0,
+        "high_10_plus": bucket_row[3] or 0,
+    }
+
+    report["memory_health"] = {
+        "total": total,
+        "hit_rate_pct": round(100 - rate_stats["never_accessed_pct"], 1),
+        "velocity_7d": velocity,
+        "velocity_total_7d": week_total,
+        "dead_memories": dead_count,
+        "dead_pct": round(dead_pct, 1),
+        "access_buckets": access_buckets,
+        "avg_access_count": rate_stats["avg_access_count"],
+    }
+
+    # --- 2. Tool Usage (from coord_audit) -----------------------------------
+    tool_usage: Dict[str, Any] = {"top_tools": [], "omega_tools": [], "total_calls": 0, "omega_calls": 0}
+    try:
+        from omega.coordination import get_manager
+        mgr = get_manager()
+        if mgr:
+            # Top 20 tools by call count
+            top_rows = mgr._conn.execute(
+                """SELECT tool_name, COUNT(*) as calls,
+                          AVG(latency_ms) as avg_latency
+                   FROM coord_audit
+                   WHERE created_at > datetime('now', '-' || ? || ' days')
+                   GROUP BY tool_name ORDER BY calls DESC LIMIT 20""",
+                (days,),
+            ).fetchall()
+            tool_usage["top_tools"] = [
+                {"tool": r[0], "calls": r[1], "avg_latency_ms": round(r[2]) if r[2] else None}
+                for r in top_rows
+            ]
+
+            # Total call count
+            total_row = mgr._conn.execute(
+                """SELECT COUNT(*) FROM coord_audit
+                   WHERE created_at > datetime('now', '-' || ? || ' days')""",
+                (days,),
+            ).fetchone()
+            tool_usage["total_calls"] = total_row[0] if total_row else 0
+
+            # OMEGA-specific tools
+            omega_rows = mgr._conn.execute(
+                """SELECT tool_name, COUNT(*) FROM coord_audit
+                   WHERE tool_name LIKE 'mcp__omega%'
+                     AND created_at > datetime('now', '-' || ? || ' days')
+                   GROUP BY tool_name ORDER BY COUNT(*) DESC""",
+                (days,),
+            ).fetchall()
+            tool_usage["omega_tools"] = [{"tool": r[0], "calls": r[1]} for r in omega_rows]
+            tool_usage["omega_calls"] = sum(r[1] for r in omega_rows)
+    except Exception as e:
+        logger.debug("diagnostic: coord_audit unavailable: %s", e)
+    report["tool_usage"] = tool_usage
+
+    # --- 3. Session Activity ------------------------------------------------
+    sessions: Dict[str, Any] = {"total": 0, "week": 0, "month": 0}
+    try:
+        from omega.coordination import get_manager
+        mgr = get_manager()
+        if mgr:
+            sess_row = mgr._conn.execute(
+                """SELECT
+                     COUNT(*),
+                     SUM(CASE WHEN started_at > datetime('now', '-7 days') THEN 1 ELSE 0 END),
+                     SUM(CASE WHEN started_at > datetime('now', '-30 days') THEN 1 ELSE 0 END)
+                   FROM coord_sessions"""
+            ).fetchone()
+            if sess_row:
+                sessions = {
+                    "total": sess_row[0] or 0,
+                    "week": sess_row[1] or 0,
+                    "month": sess_row[2] or 0,
+                }
+    except Exception as e:
+        logger.debug("diagnostic: coord_sessions unavailable: %s", e)
+    report["sessions"] = sessions
+
+    # --- 4. LLM Costs -------------------------------------------------------
+    llm_costs: Dict[str, Any] = {}
+    try:
+        from omega.usage_tracker import UsageTracker
+        tracker = UsageTracker()
+        llm_costs = tracker.get_cost_estimate(days=days)
+        llm_costs["by_model"] = tracker.get_usage(days=days, group_by="model")
+        tracker.close()
+    except Exception as e:
+        logger.debug("diagnostic: usage_tracker unavailable: %s", e)
+    report["llm_costs"] = llm_costs
+
+    # --- 5. Value Assessment ------------------------------------------------
+    hit_rate = report["memory_health"]["hit_rate_pct"]
+    omega_calls = tool_usage["omega_calls"]
+    total_calls = tool_usage["total_calls"]
+
+    verdict = "idle"
+    if hit_rate > 60 and omega_calls > 50:
+        verdict = "healthy"
+    elif hit_rate > 40 and omega_calls >= 5:
+        verdict = "underused"
+
+    report["value_assessment"] = {
+        "memory_hit_rate": f"{hit_rate:.0f}%",
+        "memory_velocity": f"{week_total} new in 7 days",
+        "dead_memory_pct": f"{dead_pct:.0f}%",
+        "omega_tool_calls": omega_calls,
+        "total_tool_calls": total_calls,
+        "omega_usage_pct": f"{omega_calls / max(total_calls, 1) * 100:.1f}%",
+        "verdict": verdict,
+    }
+
+    report["period_days"] = days
+    return report
 
 
 # ---------------------------------------------------------------------------
@@ -3009,91 +4728,49 @@ def get_weekly_digest(days: int = 7) -> Dict[str, Any]:
     db = _get_store()
     now = datetime.now(timezone.utc)
     cutoff = (now - timedelta(days=days)).isoformat()
+    prev_cutoff = (now - timedelta(days=days * 2)).isoformat()
 
     total = db.node_count()
 
-    # Count memories created in the period
-    try:
-        with db._lock:
-            row = db._conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE created_at >= ?", (cutoff,)
-            ).fetchone()
-        period_count = row[0] if row else 0
-    except Exception:
-        period_count = 0
-
-    # Type breakdown for the period
-    type_breakdown: Dict[str, int] = {}
-    try:
-        with db._lock:
-            rows = db._conn.execute(
-                "SELECT event_type, COUNT(*) FROM memories "
-                "WHERE created_at >= ? AND event_type IS NOT NULL "
-                "GROUP BY event_type ORDER BY COUNT(*) DESC",
-                (cutoff,),
-            ).fetchall()
-        type_breakdown = {r[0]: r[1] for r in rows if r[0]}
-    except Exception:
-        pass
-
-    # Session count for the period
-    session_count = 0
-    try:
-        with db._lock:
-            row = db._conn.execute(
-                "SELECT COUNT(DISTINCT session_id) FROM memories "
-                "WHERE created_at >= ? AND session_id IS NOT NULL",
-                (cutoff,),
-            ).fetchone()
-        session_count = row[0] if row else 0
-    except Exception:
-        pass
+    # Delegate all period queries to the store's single-lock method
+    stats = db.get_period_stats(cutoff=cutoff, prev_cutoff=prev_cutoff)
+    period_count = stats["period_count"]
+    type_breakdown = stats["type_breakdown"]
+    session_count = stats["session_count"]
+    prev_count = stats["prev_period_count"]
 
     # Top topics: extract most common words from recent content (simple TF)
+    _STOP_WORDS = {
+        "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+        "have", "has", "had", "do", "does", "did", "will", "would", "could",
+        "should", "may", "might", "shall", "can", "to", "of", "in", "for",
+        "on", "with", "at", "by", "from", "as", "into", "through", "during",
+        "before", "after", "above", "below", "between", "out", "off", "over",
+        "under", "again", "further", "then", "once", "and", "but", "or", "nor",
+        "not", "so", "yet", "both", "each", "few", "more", "most", "other",
+        "some", "such", "no", "only", "own", "same", "than", "too", "very",
+        "just", "because", "if", "when", "while", "how", "what", "which",
+        "who", "whom", "this", "that", "these", "those", "it", "its", "my",
+        "your", "his", "her", "our", "their", "all", "any", "up", "about",
+        "error", "memory", "session", "plan", "decision", "captured",
+    }
     top_topics: list[str] = []
-    try:
-        with db._lock:
-            rows = db._conn.execute(
-                "SELECT content FROM memories WHERE created_at >= ? LIMIT 200",
-                (cutoff,),
-            ).fetchall()
-        word_counts: Dict[str, int] = {}
-        _stop_words = {
-            "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
-            "have", "has", "had", "do", "does", "did", "will", "would", "could",
-            "should", "may", "might", "shall", "can", "to", "of", "in", "for",
-            "on", "with", "at", "by", "from", "as", "into", "through", "during",
-            "before", "after", "above", "below", "between", "out", "off", "over",
-            "under", "again", "further", "then", "once", "and", "but", "or", "nor",
-            "not", "so", "yet", "both", "each", "few", "more", "most", "other",
-            "some", "such", "no", "only", "own", "same", "than", "too", "very",
-            "just", "because", "if", "when", "while", "how", "what", "which",
-            "who", "whom", "this", "that", "these", "those", "it", "its", "my",
-            "your", "his", "her", "our", "their", "all", "any", "up", "about",
-            "error", "memory", "session", "plan", "decision", "captured",
-        }
-        for (content,) in rows:
-            words = re.findall(r'[a-zA-Z_]{4,}', content.lower())
-            for w in words:
-                if w not in _stop_words:
-                    word_counts[w] = word_counts.get(w, 0) + 1
-        top_topics = [w for w, _ in sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:8]]
-    except Exception:
-        pass
+    word_counts: Dict[str, int] = {}
+    for content in stats["content_samples"]:
+        words = re.findall(r'[a-zA-Z_]{4,}', content.lower())
+        for w in words:
+            if w not in _STOP_WORDS:
+                word_counts[w] = word_counts.get(w, 0) + 1
+    top_topics = [w for w, _ in sorted(word_counts.items(), key=lambda x: x[1], reverse=True)[:8]]
 
-    # Growth comparison with previous period
-    prev_cutoff = (now - timedelta(days=days * 2)).isoformat()
-    prev_count = 0
-    try:
-        with db._lock:
-            row = db._conn.execute(
-                "SELECT COUNT(*) FROM memories WHERE created_at >= ? AND created_at < ?",
-                (prev_cutoff, cutoff),
-            ).fetchone()
-        prev_count = row[0] if row else 0
-    except Exception:
-        pass
     growth_pct = ((period_count - prev_count) / max(prev_count, 1)) * 100 if prev_count > 0 else 0
+
+    # Oldest memory recalled this week
+    oldest_recalled_days = None
+    try:
+        oldest_recalled_days = db.get_oldest_accessed_since(cutoff)
+    except Exception as e:
+        logger.debug("get_weekly_digest oldest_recalled failed: %s", e)
 
     return {
         "period_days": days,
@@ -3104,6 +4781,7 @@ def get_weekly_digest(days: int = 7) -> Dict[str, Any]:
         "top_topics": top_topics,
         "growth_pct": round(growth_pct, 1),
         "prev_period_count": prev_count,
+        "oldest_recalled_days": oldest_recalled_days,
     }
 
 
@@ -3223,14 +4901,14 @@ def parse_duration(text: str) -> timedelta:
     text = text.strip().lower()
     m = _DURATION_RE.fullmatch(text)
     if not m or not any(m.groups()):
-        raise ValueError(f"Invalid duration: {text!r}. Use e.g. '1h', '30m', '2d', '1w', '1d12h'.")
+        raise ValidationError(f"Invalid duration: {text!r}. Use e.g. '1h', '30m', '2d', '1w', '1d12h'.")
     weeks = int(m.group(1) or 0)
     days = int(m.group(2) or 0)
     hours = int(m.group(3) or 0)
     minutes = int(m.group(4) or 0)
     td = timedelta(weeks=weeks, days=days, hours=hours, minutes=minutes)
     if td.total_seconds() <= 0:
-        raise ValueError("Duration must be positive.")
+        raise ValidationError("Duration must be positive.")
     return td
 
 
@@ -3280,7 +4958,8 @@ def create_reminder(
     # Human-readable local time
     try:
         local_str = remind_at.astimezone().strftime("%Y-%m-%d %H:%M %Z")
-    except Exception:
+    except Exception as e:
+        logger.debug("Timezone conversion failed: %s", e)
         local_str = remind_at.isoformat()
 
     return {
@@ -3295,13 +4974,21 @@ def create_reminder(
 def list_reminders(
     status: Optional[str] = None,
     include_dismissed: bool = False,
+    entity_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
-    """List reminders, sorted by overdue first then by remind_at ascending."""
+    """List reminders, sorted by overdue first then by remind_at ascending.
+
+    Args:
+        entity_id: If provided, only return reminders scoped to this entity.
+    """
     db = _get_store()
+    sql = "SELECT node_id, content, metadata, created_at FROM memories WHERE event_type = 'reminder'"
+    params: list = []
+    if entity_id:
+        sql += " AND COALESCE(entity_id, '') = ?"
+        params.append(entity_id)
     with db._lock:
-        rows = db._conn.execute(
-            "SELECT node_id, content, metadata, created_at FROM memories WHERE event_type = 'reminder'"
-        ).fetchall()
+        rows = db._conn.execute(sql, params).fetchall()
 
     now = datetime.now(timezone.utc)
     # Regex to strip the internal [due: ...] suffix from stored content
@@ -3315,6 +5002,21 @@ def list_reminders(
             meta = {}
 
         r_status = meta.get("reminder_status", "pending")
+
+        # Filter out superseded reminders (safety net for Phase 4.5)
+        # But keep superseded reminders that are overdue — if the superseding
+        # reminder also hasn't fired, the user still needs to be notified.
+        if meta.get("superseded") and not include_dismissed and status != "all":
+            remind_at_str_check = meta.get("remind_at", "")
+            try:
+                remind_at_check = datetime.fromisoformat(remind_at_str_check)
+                if remind_at_check.tzinfo is None:
+                    remind_at_check = remind_at_check.replace(tzinfo=timezone.utc)
+                is_overdue_check = now >= remind_at_check and r_status == "pending"
+            except (ValueError, TypeError):
+                is_overdue_check = False
+            if not is_overdue_check:
+                continue
 
         # Filter by status
         if status and status != "all" and r_status != status:
@@ -3336,11 +5038,21 @@ def list_reminders(
 
         try:
             remind_at_local = remind_at.astimezone().strftime("%Y-%m-%d %H:%M %Z")
-        except Exception:
+        except Exception as e:
+            logger.debug("Timezone conversion failed: %s", e)
             remind_at_local = remind_at.isoformat()
 
         # Strip internal [due: ...] suffix for clean display
         clean_text = _due_suffix_re.sub("", content)
+
+        # Compute age since creation for staleness detection
+        try:
+            created_dt = datetime.fromisoformat(created_at) if created_at else now
+            if created_dt.tzinfo is None:
+                created_dt = created_dt.replace(tzinfo=timezone.utc)
+            pending_days = (now - created_dt).days
+        except (ValueError, TypeError):
+            pending_days = 0
 
         results.append({
             "id": node_id,
@@ -3350,6 +5062,7 @@ def list_reminders(
             "remind_at_local": remind_at_local,
             "is_due": is_due,
             "is_overdue": is_overdue,
+            "pending_days": pending_days,
             "time_until": str(time_until).split(".")[0] if not is_due else "overdue",
             "context": meta.get("context"),
             "created_at": created_at,
@@ -3378,12 +5091,16 @@ def dismiss_reminder(reminder_id: str) -> Dict[str, Any]:
     return {"success": True, "dismissed_id": reminder_id, "text": clean_text}
 
 
-def get_due_reminders(mark_fired: bool = False) -> List[Dict[str, Any]]:
+def get_due_reminders(
+    mark_fired: bool = False,
+    entity_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     """Get all pending reminders that are due now.
 
     If mark_fired=True, transitions their status from 'pending' to 'fired'.
+    If entity_id is provided, only returns reminders scoped to that entity.
     """
-    all_reminders = list_reminders(status="pending")
+    all_reminders = list_reminders(status="pending", entity_id=entity_id)
     due = [r for r in all_reminders if r["is_due"]]
 
     if mark_fired and due:
@@ -3427,6 +5144,7 @@ __all__ = [
     "status",
     "get_cross_session_lessons",
     "get_cross_project_lessons",
+    "distill_trajectory",
     "reset_memory",
     "record_feedback",
     "clear_session",
@@ -3449,23 +5167,4 @@ __all__ = [
     "list_reminders",
     "dismiss_reminder",
     "get_due_reminders",
-    "get_first_memory_date",
 ]
-
-
-def get_first_memory_date() -> Optional[datetime]:
-    """Get the creation date of the first memory in the store."""
-    store = _get_store()
-    try:
-        # Query for the oldest memory by created_at
-        cursor = store.conn.execute(
-            "SELECT created_at FROM memories ORDER BY created_at ASC LIMIT 1"
-        )
-        row = cursor.fetchone()
-        if row and row[0]:
-            # Parse ISO timestamp
-            return datetime.fromisoformat(row[0].replace("Z", "+00:00"))
-        return None
-    except Exception as e:
-        logger.warning(f"Failed to get first memory date: {e}")
-        return None

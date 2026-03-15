@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """OMEGA SessionStart hook — Welcome briefing with recent context."""
+import fcntl
 import os
 import time
 import traceback
@@ -23,22 +24,67 @@ def _log_hook_error(hook_name, error):
         pass
 
 
-def _maybe_auto_consolidate():
-    """Run lightweight consolidation if >7 days since last run."""
+def _try_acquire_periodic(marker_name: str, min_age_days: int):
+    """Atomically check and claim a periodic task via file lock.
+
+    Returns the old marker content (for rollback) if claimed, None if skipped.
+    Uses fcntl.flock to prevent concurrent processes from racing.
+    """
+    omega_dir = Path.home() / ".omega"
+    omega_dir.mkdir(parents=True, exist_ok=True)
+    marker = omega_dir / marker_name
+    lock_path = omega_dir / f"{marker_name}.lock"
+    lock_fd = os.open(str(lock_path), os.O_WRONLY | os.O_CREAT, 0o600)
     try:
-        marker = Path.home() / ".omega" / "last-consolidate"
+        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (OSError, BlockingIOError):
+        os.close(lock_fd)
+        return None  # Another process holds the lock
+
+    try:
+        old_content = None
         if marker.exists():
-            last_ts = marker.read_text().strip()
-            last = datetime.fromisoformat(last_ts)
+            old_content = marker.read_text().strip()
+            last = datetime.fromisoformat(old_content)
             if last.tzinfo is None:
                 last = last.replace(tzinfo=timezone.utc)
             age_days = (datetime.now(timezone.utc) - last).days
-            if age_days < 7:
-                return
-        from omega.bridge import consolidate
-        consolidate(prune_days=30, max_summaries=50)
-        marker.parent.mkdir(parents=True, exist_ok=True)
+            if age_days < min_age_days:
+                return None
+
+        # Write marker BEFORE the slow operation to block other processes
         marker.write_text(datetime.now(timezone.utc).isoformat())
+        return old_content if old_content else ""
+    except Exception:
+        return None
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
+def _rollback_marker(marker_name: str, old_content: str):
+    """Restore a marker to its previous value on failure."""
+    marker = Path.home() / ".omega" / marker_name
+    if old_content == "":
+        marker.unlink(missing_ok=True)
+    else:
+        marker.write_text(old_content)
+
+
+def _maybe_auto_consolidate():
+    """Run lightweight consolidation if >3 days since last run."""
+    try:
+        old = _try_acquire_periodic("last-consolidate", 3)
+        if old is None:
+            return
+        try:
+            from omega.bridge import consolidate
+            consolidate(prune_days=7, max_summaries=30)
+        except ImportError:
+            _rollback_marker("last-consolidate", old)
+        except Exception:
+            _rollback_marker("last-consolidate", old)
+            raise
     except ImportError:
         pass
     except Exception as e:
@@ -48,26 +94,23 @@ def _maybe_auto_consolidate():
 def _maybe_auto_backup():
     """Export a backup if >7 days since last backup. Keep last 4."""
     try:
-        marker = Path.home() / ".omega" / "last-backup"
-        if marker.exists():
-            last_ts = marker.read_text().strip()
-            last = datetime.fromisoformat(last_ts)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            age_days = (datetime.now(timezone.utc) - last).days
-            if age_days < 7:
-                return
-        backup_dir = Path.home() / ".omega" / "backups"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        dest = backup_dir / f"omega-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json"
-        from omega.bridge import export_memories
-        export_memories(filepath=str(dest))
-        # Rotate: keep only last 4
-        backups = sorted(backup_dir.glob("omega-*.json"), key=lambda p: p.name, reverse=True)
-        for old in backups[4:]:
-            old.unlink()
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(datetime.now(timezone.utc).isoformat())
+        old = _try_acquire_periodic("last-backup", 7)
+        if old is None:
+            return
+        try:
+            backup_dir = Path.home() / ".omega" / "backups"
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            dest = backup_dir / f"omega-{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.json"
+            from omega.bridge import export_memories
+            export_memories(filepath=str(dest))
+            backups = sorted(backup_dir.glob("omega-*.json"), key=lambda p: p.name, reverse=True)
+            for b in backups[4:]:
+                b.unlink()
+        except ImportError:
+            _rollback_marker("last-backup", old)
+        except Exception:
+            _rollback_marker("last-backup", old)
+            raise
     except ImportError:
         pass
     except Exception as e:
@@ -75,39 +118,62 @@ def _maybe_auto_backup():
 
 
 def _maybe_auto_compact():
-    """Run compaction of lesson_learned memories if >14 days since last run."""
+    """Run compaction of high-volume memory types if >3 days since last run."""
     try:
-        marker = Path.home() / ".omega" / "last-compact"
-        if marker.exists():
-            last_ts = marker.read_text().strip()
-            last = datetime.fromisoformat(last_ts)
-            if last.tzinfo is None:
-                last = last.replace(tzinfo=timezone.utc)
-            age_days = (datetime.now(timezone.utc) - last).days
-            if age_days < 14:
-                return
-        from omega.bridge import compact
-        compact(event_type="lesson_learned", similarity_threshold=0.60, min_cluster_size=3)
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(datetime.now(timezone.utc).isoformat())
+        old = _try_acquire_periodic("last-compact", 3)
+        if old is None:
+            return
+        try:
+            from omega.bridge import compact
+            for etype in ("advisor_insight", "lesson_learned", "decision",
+                          "observation", "session_summary", "handoff", "task_completion"):
+                compact(event_type=etype, similarity_threshold=0.50, min_cluster_size=2)
+        except ImportError:
+            _rollback_marker("last-compact", old)
+        except Exception:
+            _rollback_marker("last-compact", old)
+            raise
     except ImportError:
         pass
     except Exception as e:
         _log_hook_error("auto_compact", e)
 
 
+def _maybe_analyze_behavior():
+    """Run behavioral pattern extraction if >3 days since last run."""
+    try:
+        old = _try_acquire_periodic("last-behavioral-analysis", 3)
+        if old is None:
+            return
+        try:
+            from omega.behavioral import analyze_and_store
+            analyze_and_store()
+        except ImportError:
+            _rollback_marker("last-behavioral-analysis", old)
+        except Exception:
+            _rollback_marker("last-behavioral-analysis", old)
+            raise
+    except ImportError:
+        pass
+    except Exception as e:
+        _log_hook_error("behavioral_analysis", e)
+
+
 def main():
     project = os.environ.get("PROJECT_DIR", os.getcwd())
     session_id = os.environ.get("SESSION_ID", "")
 
-    # Auto-consolidation check (lightweight, max once per 7 days)
+    # Auto-consolidation check (lightweight, max once per 3 days)
     _maybe_auto_consolidate()
 
-    # Auto-compaction check (max once per 14 days)
+    # Auto-compaction check (max once per 3 days)
     _maybe_auto_compact()
 
     # Auto-backup check (max once per 7 days)
     _maybe_auto_backup()
+
+    # Behavioral pattern extraction (max once per 3 days)
+    _maybe_analyze_behavior()
 
     try:
         from omega.bridge import welcome
@@ -120,11 +186,10 @@ def main():
         print(f"OMEGA welcome failed: {e}")
         return
 
-    greeting = result.get("greeting", "")
     memory_count = result.get("memory_count", 0)
     recent = result.get("recent_memories", [])
 
-    print(f"## {greeting}")
+    print(f"## Welcome back! OMEGA ready — {memory_count} memories")
 
     # First-time user "Aha" moment
     if memory_count == 0:
@@ -178,51 +243,40 @@ def main():
         if node_count > 0:
             ratio = edge_count / node_count
             graph_label = "rich" if ratio >= 1.5 else ("good" if ratio >= 0.5 else "sparse")
-            graph_info = f" | **Graph:** {graph_label} ({edge_count:,} edges, {ratio:.1f}x)"
+            graph_info = f" | graph: {graph_label} ({edge_count:,} edges)"
         else:
             graph_info = ""
-        print(f"**Health:** {health_label} | **Last capture:** {ago}{graph_info}")
+        print(f"Health: {health_label} | Last capture: {ago}{graph_info}")
     except Exception:
         pass
 
-    # Profile summary
+    # Behavioral patterns (habits) — with confidence decay and status
     try:
-        from omega.profile.engine import get_profile_engine
-        _pe = get_profile_engine()
-        with _pe._lock:
-            _prow = _pe._conn.execute("SELECT COUNT(*) as cnt FROM secure_profile").fetchone()
-        _pcnt = _prow["cnt"] if _prow else 0
-        if _pcnt > 0:
-            print(f"**Profile:** {_pcnt} encrypted field(s) stored")
-    except Exception:
+        from omega.behavioral import effective_confidence
+        from omega.bridge import _get_store as _get_store_habits
+        habit_store = _get_store_habits()
+        habits = habit_store.get_by_type("behavioral_pattern", limit=10)
+        surfaced = []
+        for h in habits:
+            meta = h.metadata or {}
+            if meta.get("suppressed"):
+                continue
+            raw_conf = meta.get("confidence", 0)
+            last_ev = meta.get("last_evidence_at") or meta.get("captured_at", "")
+            eff_conf = effective_confidence(raw_conf, last_ev)
+            if eff_conf >= 0.7:
+                status = "confirmed" if meta.get("user_confirmed") else "inferred"
+                surfaced.append((h, eff_conf, status))
+            if len(surfaced) >= 3:
+                break
+        if surfaced:
+            print("\n[HABITS] Inferred from your behavior:")
+            for h, conf, status in surfaced:
+                print(f"  - {h.content} ({status}, {conf:.0%})")
+    except ImportError:
         pass
-
-    # Proactive maintenance suggestion when graph is sparse
-    try:
-        if node_count > 0 and edge_count / node_count < 0.5:
-            print("[MAINTENANCE] Graph connectivity is sparse — consider running omega_compact to consolidate related memories")
-    except Exception:
-        pass
-
-    # Type stats — show top-3 memory types
-    try:
-        from omega.bridge import type_stats
-        stats = type_stats()
-        if stats:
-            top3 = sorted(stats.items(), key=lambda x: x[1], reverse=True)[:3]
-            parts = [f"{k}: {v}" for k, v in top3]
-            print(f"**Store:** {' | '.join(parts)}")
-    except Exception:
-        pass
-
-    # Preferences count
-    try:
-        from omega.bridge import list_preferences
-        prefs = list_preferences()
-        if prefs:
-            print(f"**Preferences:** {len(prefs)} stored")
-    except Exception:
-        pass
+    except Exception as e:
+        _log_hook_error("behavioral_habits", e)
 
     # Clean up stale surfacing counter files (both .surfaced and .surfaced.json)
     try:
@@ -275,49 +329,8 @@ def main():
     except Exception as e:
         _log_hook_error("project_lessons", e)
 
-    # Auto-surfaced weekly digest (max once per 7 days, 20+ memories)
-    if memory_count >= 20:
-        try:
-            marker = Path.home() / ".omega" / "last-digest"
-            should_digest = True
-            if marker.exists():
-                last_ts = marker.read_text().strip()
-                last = datetime.fromisoformat(last_ts)
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                age_days = (datetime.now(timezone.utc) - last).days
-                if age_days < 7:
-                    should_digest = False
-
-            if should_digest:
-                from omega.bridge import get_weekly_digest
-                digest = get_weekly_digest(days=7)
-                period_new = digest.get("period_new", 0)
-                session_count = digest.get("session_count", 0)
-                total = digest.get("total_memories", 0)
-                growth_pct = digest.get("growth_pct", 0)
-                type_breakdown = digest.get("type_breakdown", {})
-
-                if period_new > 0:
-                    print(f"\n[WEEKLY] This week: {period_new} memories across {session_count} sessions")
-                    if type_breakdown:
-                        bd_parts = [f"{v} {k.replace('_', ' ')}" for k, v in sorted(type_breakdown.items(), key=lambda x: x[1], reverse=True)[:3]]
-                        print(f"  Breakdown: {', '.join(bd_parts)}")
-                    sign = "+" if growth_pct >= 0 else ""
-                    print(f"  Trend: {sign}{growth_pct:.0f}% vs prior week | {total} total memories")
-
-                    marker.parent.mkdir(parents=True, exist_ok=True)
-                    marker.write_text(datetime.now(timezone.utc).isoformat())
-        except ImportError:
-            pass
-        except Exception as e:
-            _log_hook_error("weekly_digest", e)
-
-    if recent:
-        print(f"\n**Recent memories ({memory_count} total):**")
-        for mem in recent[:3]:
-            content = mem.get("content", "")[:100]
-            print(f"- {content}")
+    # Weekly digest, type stats, preferences, recent memories available on-demand
+    # via omega_weekly_digest, omega_type_stats, omega_list_preferences.
 
 
 def _log_timing(hook_name, elapsed_ms):
