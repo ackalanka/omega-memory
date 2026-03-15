@@ -12,8 +12,6 @@ from omega.server.handlers import (
     HANDLERS,
     handle_omega_tools,
     handle_omega_call,
-    _ALL_SCHEMAS,
-    _ALL_HANDLERS,
 )
 
 

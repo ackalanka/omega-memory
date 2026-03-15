@@ -926,13 +926,13 @@ def _setup_venv(errors_ref: list):
     python_path = _resolve_python_path()
     omega_bin = shutil.which("omega") or str(Path(python_path).parent / "omega")
 
-    print(f"\n  OMEGA venv configuration:")
+    print("\n  OMEGA venv configuration:")
     print(f"  Python:  {python_path}")
     print(f"  CLI:     {omega_bin}")
-    print(f"\n  MCP server (stdio):")
+    print("\n  MCP server (stdio):")
     print(f"    command: {python_path}")
-    print(f'    args:    ["-m", "omega.server.mcp_server"]')
-    print(f"\n  JSON config block (copy into your client):")
+    print('    args:    ["-m", "omega.server.mcp_server"]')
+    print("\n  JSON config block (copy into your client):")
     config = json.dumps({
         "omega-memory": {
             "command": python_path,
