@@ -190,7 +190,7 @@ class TestContextualReranking:
         )
 
         results = store.query(
-            "code style preferences",
+            "type hints Python",
             limit=2,
             context_tags=["python"],
         )

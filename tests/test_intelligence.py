@@ -245,7 +245,7 @@ class TestMCPHandlers:
         """Verify handlers include expected tools."""
         from omega.server.handlers import HANDLERS
         assert "omega_backup" in HANDLERS  # merged export+import into backup
-        assert len(HANDLERS) == 36  # 14 consolidated + backward-compat aliases
+        assert len(HANDLERS) == 38  # 14 consolidated + backward-compat aliases + 2 condensed mode meta-tools
 
     def test_schema_count(self):
         """Verify schemas include expected tools."""

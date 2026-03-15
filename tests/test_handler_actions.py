@@ -221,8 +221,16 @@ class TestOmegaStatsMilestones:
     @pytest.mark.asyncio
     async def test_milestones_with_data(self, mock_get_store):
         store = mock_get_store
-        for i in range(5):
-            store.store(f"Memory {i}", metadata={"event_type": "decision"})
+        # Use very distinct content to avoid dedup
+        topics = [
+            "We chose PostgreSQL for the orders database",
+            "Authentication uses JWT tokens not sessions",
+            "Frontend built with React and TypeScript strict mode",
+            "Deployed on AWS ECS with Fargate launch type",
+            "Monitoring uses Datadog with custom dashboards",
+        ]
+        for topic in topics:
+            store.store(topic, metadata={"event_type": "decision"})
 
         result = await handle_omega_stats({"action": "milestones"})
         text = result["content"][0]["text"]
