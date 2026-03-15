@@ -10,6 +10,15 @@ For full Claude Code integration (MCP tools, auto-capture, coordination),
 install with: ``pip install omega-memory[server]``
 """
 
+import sys
+
+if sys.version_info < (3, 11):
+    raise RuntimeError(
+        f"OMEGA requires Python 3.11 or later. "
+        f"You are running Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}. "
+        f"Please upgrade your Python installation."
+    )
+
 __version__ = "1.2.0"
 
 from omega.sqlite_store import SQLiteStore
