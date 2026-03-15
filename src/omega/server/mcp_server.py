@@ -67,9 +67,9 @@ for _plugin in _discovered_plugins:
 # ---------------------------------------------------------------------------
 # Condensed Mode (CodeMode-inspired) — expose 2 meta-tools + 3 standalone
 # instead of 20+ individual tools to save ~88% context tokens.
-# Toggle via OMEGA_CONDENSED=1 env var or omega serve --condensed.
+# On by default. Disable with OMEGA_CONDENSED=0 if needed.
 # ---------------------------------------------------------------------------
-_CONDENSED_MODE = os.environ.get("OMEGA_CONDENSED", "0") == "1"
+_CONDENSED_MODE = os.environ.get("OMEGA_CONDENSED", "1") != "0"
 
 # Give handlers access to the full merged schema list and handler registry
 # so omega_tools and omega_call can discover and dispatch all tools.
