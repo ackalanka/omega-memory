@@ -604,6 +604,8 @@ omega doctor
 
 For detailed architecture documentation, including the search pipeline, memory lifecycle, hook system, and storage layer, see **[docs/architecture.md](docs/architecture.md)**.
 
+For the full CLI command reference, see **[docs/cli.md](docs/cli.md)**.
+
 ## Troubleshooting
 
 **`omega doctor` shows FAIL on import:**
