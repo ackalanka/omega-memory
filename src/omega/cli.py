@@ -768,6 +768,128 @@ def _setup_cline(errors_ref: list, hooks_src: Path):
     _setup_generic_mcp_client("cline")
 
 
+def _setup_codex(errors_ref: list, hooks_src: Path):
+    """OpenAI Codex CLI setup: merge MCP server into ~/.codex/config.toml."""
+    print("  Configuring OpenAI Codex CLI...")
+    config_path = Path.home() / ".codex" / "config.toml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    python_path = _resolve_python_path()
+
+    # Read existing TOML content (preserve manually since tomllib is read-only)
+    lines = []
+    if config_path.exists():
+        try:
+            lines = config_path.read_text().splitlines(keepends=True)
+        except OSError as e:
+            errors_ref.append(e)
+            print(f"  ERROR: Could not read {config_path}: {e}")
+            return
+
+    # Check if omega-memory is already configured
+    content = "".join(lines)
+    if "mcp_servers.omega-memory" in content:
+        print(f"  omega-memory already configured in {config_path}")
+        return
+
+    # Build the TOML block to insert
+    toml_block = (
+        '\n[mcp_servers.omega-memory]\n'
+        f'command = "{python_path}"\n'
+        'args = ["-m", "omega.server.mcp_server"]\n'
+    )
+
+    # Insert before the first [projects.*] section if present, otherwise append
+    insert_idx = None
+    for i, line in enumerate(lines):
+        if line.strip().startswith("[projects."):
+            insert_idx = i
+            break
+
+    if insert_idx is not None:
+        lines.insert(insert_idx, toml_block + "\n")
+    else:
+        lines.append(toml_block)
+
+    try:
+        config_path.write_text("".join(lines))
+        print(f"  Wrote MCP config to {config_path}")
+        print("  Restart Codex CLI to activate OMEGA.")
+        print("  NOTE: Hooks (auto-capture, memory surfacing) are only available with Claude Code.")
+    except OSError as e:
+        errors_ref.append(e)
+        print(f"  ERROR: Could not write {config_path}: {e}")
+
+
+def _setup_antigravity(errors_ref: list, hooks_src: Path):
+    """Antigravity IDE setup: write MCP config to ~/.gemini/antigravity/mcp_config.json."""
+    print("  Configuring Antigravity IDE...")
+    config_path = Path.home() / ".gemini" / "antigravity" / "mcp_config.json"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+
+    python_path = _resolve_python_path()
+    mcp_entry = {
+        "mcpServers": {
+            "omega-memory": {
+                "command": python_path,
+                "args": ["-m", "omega.server.mcp_server"],
+            }
+        }
+    }
+
+    # Read or create config
+    if config_path.exists():
+        try:
+            config = json.loads(config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            config = {}
+    else:
+        config = {}
+
+    if "mcpServers" not in config:
+        config["mcpServers"] = {}
+
+    if "omega-memory" in config.get("mcpServers", {}):
+        print(f"  omega-memory already configured in {config_path}")
+        return
+
+    config["mcpServers"]["omega-memory"] = {
+        "command": python_path,
+        "args": ["-m", "omega.server.mcp_server"],
+    }
+
+    try:
+        config_path.write_text(json.dumps(config, indent=2) + "\n")
+        print(f"  Wrote MCP config to {config_path}")
+        print("  Restart Antigravity to activate OMEGA.")
+        print("  NOTE: Hooks (auto-capture, memory surfacing) are only available with Claude Code.")
+    except OSError as e:
+        errors_ref.append(e)
+        print(f"  ERROR: Could not write {config_path}: {e}")
+
+
+def _setup_venv(errors_ref: list, hooks_src: Path):
+    """Venv setup: print MCP and CLI paths for manual client configuration."""
+    python_path = _resolve_python_path()
+    omega_bin = shutil.which("omega") or str(Path(python_path).parent / "omega")
+
+    print(f"\n  OMEGA venv configuration:")
+    print(f"  Python:  {python_path}")
+    print(f"  CLI:     {omega_bin}")
+    print(f"\n  MCP server (stdio):")
+    print(f"    command: {python_path}")
+    print(f'    args:    ["-m", "omega.server.mcp_server"]')
+    print(f"\n  JSON config block (copy into your client):")
+    config = json.dumps({
+        "omega-memory": {
+            "command": python_path,
+            "args": ["-m", "omega.server.mcp_server"],
+        }
+    }, indent=2)
+    for line in config.splitlines():
+        print(f"    {line}")
+
+
 def _setup_claude_desktop(errors_ref: list, hooks_src: Path, dry_run: bool = False):
     """Claude Desktop setup: inject MCP entry into claude_desktop_config.json."""
     # Determine config path
@@ -937,6 +1059,9 @@ def cmd_setup(args):
         "cursor": _setup_cursor,
         "windsurf": _setup_windsurf,
         "cline": _setup_cline,
+        "codex": _setup_codex,
+        "antigravity": _setup_antigravity,
+        "venv": _setup_venv,
     }
     if client == "claude-code":
         _setup_claude_code(errors, hooks_src, hooks_only=hooks_only, dry_run=dry_run)
@@ -1716,6 +1841,9 @@ def cmd_serve(args):
         return
 
     # Default: run the MCP server
+    if getattr(args, "no_condensed", False):
+        os.environ["OMEGA_CONDENSED"] = "0"
+
     if getattr(args, "daemon", False):
         os.environ["OMEGA_TRANSPORT"] = "http"
 
@@ -2816,7 +2944,7 @@ def main():
         help="Download bge-small-en-v1.5 ONNX model (upgrade from all-MiniLM-L6-v2)",
     )
     setup_parser.add_argument(
-        "--client", choices=["claude-code", "claude-desktop", "cursor", "windsurf", "cline"], help="Configure a specific client (MCP registration, hooks)"
+        "--client", choices=["claude-code", "claude-desktop", "cursor", "windsurf", "cline", "codex", "antigravity", "venv"], help="Configure a specific client (MCP registration, hooks)"
     )
     setup_parser.add_argument(
         "--dry-run",
@@ -2833,7 +2961,7 @@ def main():
     status_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     doctor_parser = subparsers.add_parser("doctor", help="Verify installation: import, model, database")
-    doctor_parser.add_argument("--client", choices=["claude-code", "claude-desktop", "cursor", "windsurf", "cline"], help="Include client-specific checks (MCP, hooks)")
+    doctor_parser.add_argument("--client", choices=["claude-code", "claude-desktop", "cursor", "windsurf", "cline", "codex", "antigravity", "venv"], help="Include client-specific checks (MCP, hooks)")
     doctor_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
 
     subparsers.add_parser("migrate", help="Copy MAGMA data to OMEGA (non-destructive)")
@@ -2869,6 +2997,7 @@ def main():
     validate_parser.add_argument("--repair", action="store_true", help="Attempt to repair FTS5 index if corrupted")
     serve_parser = subparsers.add_parser("serve", help="Run MCP server (stdio or HTTP daemon)")
     serve_parser.add_argument("--daemon", action="store_true", help="Run as HTTP daemon (OMEGA_TRANSPORT=http)")
+    serve_parser.add_argument("--no-condensed", action="store_true", help="Disable condensed mode (expose all tools individually instead of meta-tools)")
     serve_sub = serve_parser.add_subparsers(dest="serve_command", help="Daemon management")
     serve_sub.add_parser("install", help="Install launchd daemon and load it")
     serve_sub.add_parser("uninstall", help="Unload and remove launchd daemon")

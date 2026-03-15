@@ -14,7 +14,15 @@ import socket
 import sys
 import time
 
-SOCK_PATH = os.path.expanduser("~/.omega/hook.sock")
+# Windows uses TCP loopback; Unix uses domain socket
+if sys.platform == "win32":
+    SOCK_PATH = None
+    HOOK_HOST = "127.0.0.1"
+    HOOK_PORT = 19876
+else:
+    SOCK_PATH = os.path.expanduser("~/.omega/hook.sock")
+    HOOK_HOST = None
+    HOOK_PORT = None
 
 # Map hook names to their original script modules for fallback
 _FALLBACK_SCRIPTS = {
@@ -22,6 +30,7 @@ _FALLBACK_SCRIPTS = {
     "session_stop": "session_stop",
     "surface_memories": "surface_memories",
     "auto_capture": "auto_capture",
+    "assistant_capture": "assistant_capture",
     "coord_session_start": "coord_session_start",
     "coord_session_stop": "coord_session_stop",
     "coord_heartbeat": "coord_heartbeat",
@@ -29,10 +38,103 @@ _FALLBACK_SCRIPTS = {
     "pre_file_guard": "pre_file_guard",
     "pre_task_guard": "pre_task_guard",
     "pre_push_guard": "pre_push_guard",
+    "pre_deploy_guard": "pre_deploy_guard",
+    "pre_commit_guard": "pre_commit_guard",
+    "pre_protocol_gate": "pre_protocol_gate",
+    "pre_alignment_gate": "pre_alignment_gate",
+    "trace_capture": "trace_capture",
 }
+# Note: pre_irreversible_advisor is intentionally absent — it's daemon-only
+# (advisory, never blocks) with no standalone fallback script.
+# Note: pre_insight_surface is intentionally absent — it's daemon-only
+# (hook_server/insights.py) with no standalone fallback script.
 
 # Hooks that require longer timeouts (e.g., git network operations)
 _SLOW_HOOKS = {"pre_push_guard"}
+
+# Safety-critical hooks that MUST run even in fallback mode.
+# These are pre-action guards that can block dangerous operations (exit code 2).
+# All other hooks are informational and safe to skip if daemon is unavailable.
+_BLOCKING_HOOKS = {
+    "pre_file_guard", "pre_task_guard", "pre_push_guard",
+    "pre_deploy_guard", "pre_commit_guard", "pre_alignment_gate",
+    "pre_protocol_gate",
+}
+
+# Best-effort hooks run in fallback mode but never block the session.
+# These capture high-value content that would otherwise be silently dropped.
+_BEST_EFFORT_HOOKS = {
+    "assistant_capture",
+    "coord_session_stop",
+    "trace_capture",         # captures content that would otherwise be lost
+    # coord_session_start and coord_heartbeat intentionally excluded:
+    # Their fallback paths import heavy OMEGA modules + hit SQLite, causing
+    # 36-260s startup delays when 8-10 sessions race (fallback stampede).
+    # The daemon handles these when it comes up; skipping fallback is safe.
+}
+
+# Retry settings for startup race (hook fires before MCP server opens socket)
+# Kept low: retries only help during the narrow window where MCP server is
+# actively starting.  A stale socket (daemon crashed/exited) is detected and
+# cleaned up immediately — no retries needed for that case.
+_CONNECT_RETRIES = 2
+_CONNECT_RETRY_DELAY = 0.15  # seconds between retries
+
+
+def _is_socket_stale(sock_path):
+    """Check if a Unix domain socket is stale (no listener).
+
+    A stale socket means the daemon that created it has exited without
+    cleaning up.  We detect this via a non-blocking connect: if the OS
+    immediately returns ECONNREFUSED, no process is listening.  In that
+    case we remove the socket file so subsequent calls get a fast
+    FileNotFoundError instead of wasting time on retries.
+
+    Returns True if the socket was stale (and removed), False otherwise.
+    """
+    if sys.platform == "win32" or not sock_path:
+        return False
+    try:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.setblocking(False)
+        try:
+            s.connect(sock_path)
+        except BlockingIOError:
+            # Connection in progress — daemon might be alive, not stale
+            return False
+        except ConnectionRefusedError:
+            # No listener — stale socket
+            try:
+                os.unlink(sock_path)
+            except OSError:
+                pass
+            return True
+        except FileNotFoundError:
+            return True  # Already gone
+        except OSError:
+            return False  # Unknown state, don't remove
+        finally:
+            s.close()
+    except Exception:
+        return False
+    return False
+
+
+def _detect_client() -> str:
+    """Detect which AI coding client invoked this hook.
+
+    Priority: explicit env var > heuristic detection > "unknown".
+    The env var OMEGA_CLIENT is set by `omega setup --client <name>`.
+    """
+    client = os.environ.get("OMEGA_CLIENT", "")
+    if client:
+        return client
+    # Heuristic: check for known client config paths
+    if os.path.exists(os.path.expanduser("~/.claude/settings.json")):
+        return "claude-code"
+    if os.path.exists(os.path.expanduser("~/.cursor/settings.json")):
+        return "cursor"
+    return "unknown"
 
 
 def delegate(hook_names, payload, timeout=5.0):
@@ -41,10 +143,15 @@ def delegate(hook_names, payload, timeout=5.0):
     Accepts a single hook name (str) or multiple (list) for batching.
     Batch requests use {"hooks": [...]} and return {"results": [...]}.
     """
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.settimeout(timeout)
-    try:
+    if sys.platform == "win32":
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((HOOK_HOST, HOOK_PORT))
+    else:
+        s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(timeout)
         s.connect(SOCK_PATH)
+    try:
         if isinstance(hook_names, list):
             request = json.dumps({"hooks": hook_names, **payload}).encode("utf-8")
         else:
@@ -73,6 +180,8 @@ def _fallback(hook_name, payload):
     hooks_dir = os.path.dirname(os.path.abspath(__file__))
     script_name = _FALLBACK_SCRIPTS.get(hook_name)
     if not script_name:
+        if hook_name in _BLOCKING_HOOKS:
+            print(f"OMEGA: blocking hook '{hook_name}' has no fallback script — daemon-only", file=sys.stderr)
         return
 
     script_path = os.path.join(hooks_dir, f"{script_name}.py")
@@ -109,7 +218,12 @@ def _fallback(hook_name, payload):
     try:
         mod = importlib.import_module(script_name)
         if hasattr(mod, "main"):
-            mod.main()
+            import inspect
+            sig = inspect.signature(mod.main)
+            if sig.parameters:
+                mod.main(payload)
+            else:
+                mod.main()
     except Exception as e:
         print(f"OMEGA hook fallback error ({hook_name}): {e}", file=sys.stderr)
 
@@ -140,6 +254,8 @@ def _parse_payload():
         "tool_output": os.environ.get("TOOL_OUTPUT", ""),
         "session_id": os.environ.get("SESSION_ID", ""),
         "project": os.environ.get("PROJECT_DIR", os.getcwd()),
+        "client": _detect_client(),
+        "caller_pid": os.getppid(),
     }
 
     # Claude Code sends hook data as JSON on stdin for ALL hook types.
@@ -184,40 +300,79 @@ def main():
     if _SLOW_HOOKS.intersection(hook_names):
         timeout = 20.0
 
-    try:
-        result = delegate(hook_names if is_batch else hook_names[0], payload, timeout=timeout)
-        elapsed_ms = (time.monotonic() - t0) * 1000
+    # Fast-path: if socket is stale (daemon exited without cleanup),
+    # remove it immediately and skip to fallback — no retries needed.
+    if SOCK_PATH and _is_socket_stale(SOCK_PATH):
+        result = None
+    else:
+        # Try daemon connection with retries (handles startup race where
+        # SessionStart hook fires before MCP server opens the socket).
+        result = None
+        for attempt in range(_CONNECT_RETRIES + 1):
+            try:
+                result = delegate(hook_names if is_batch else hook_names[0], payload, timeout=timeout)
+                break
+            except socket.timeout:
+                break  # Daemon exists but slow — don't retry, fall through
+            except FileNotFoundError:
+                break  # Socket file missing — daemon not started, skip retries
+            except (ConnectionRefusedError, OSError):
+                if attempt < _CONNECT_RETRIES:
+                    time.sleep(_CONNECT_RETRY_DELAY)
 
+    elapsed_ms = (time.monotonic() - t0) * 1000
+
+    if result is not None:
+        # Daemon responded — process result
         if is_batch:
-            # Batch response: {"results": [{output, error, exit_code}, ...]}
             outputs = []
+            blocking_outputs = []
             exit_code = 0
             for r in result.get("results", []):
                 if r.get("output"):
                     outputs.append(r["output"])
+                    if r.get("exit_code"):
+                        blocking_outputs.append(r["output"])
                 if r.get("exit_code") and not exit_code:
                     exit_code = r["exit_code"]
             if outputs:
                 print("\n".join(outputs))
+            if exit_code and blocking_outputs:
+                print("\n".join(blocking_outputs), file=sys.stderr)
             _log_timing("+".join(hook_names), elapsed_ms, "daemon")
             if exit_code:
                 sys.exit(exit_code)
         else:
             if result.get("output"):
                 print(result["output"])
+                if result.get("exit_code"):
+                    print(result["output"], file=sys.stderr)
             _log_timing(hook_names[0], elapsed_ms, "daemon")
             exit_code = result.get("exit_code")
             if exit_code:
                 sys.exit(exit_code)
-
-    except (ConnectionRefusedError, FileNotFoundError, socket.timeout, OSError):
-        # Daemon not running — fall back to direct execution (run each sequentially).
-        # NOTE: If a blocking hook calls sys.exit(2), SystemExit propagates through
-        # and kills the process — correctly preventing subsequent hooks from running.
-        for name in hook_names:
-            _fallback(name, payload)
-        elapsed_ms = (time.monotonic() - t0) * 1000
-        _log_timing("+".join(hook_names), elapsed_ms, "fallback")
+    else:
+        # Daemon unavailable after retries.
+        # Run fallback for safety-critical blocking hooks (pre_* guards)
+        # and best-effort hooks (high-value captures that shouldn't be dropped).
+        # Skip purely informational hooks to prevent the fallback stampede where
+        # concurrent Python processes starve each other on CPU + SQLite locks.
+        blocking = [h for h in hook_names if h in _BLOCKING_HOOKS]
+        best_effort = [h for h in hook_names if h in _BEST_EFFORT_HOOKS]
+        if blocking:
+            for name in blocking:
+                _fallback(name, payload)
+        if best_effort:
+            for name in best_effort:
+                try:
+                    _fallback(name, payload)
+                except Exception:
+                    pass  # Never block session for best-effort hooks
+        if blocking or best_effort:
+            elapsed_ms = (time.monotonic() - t0) * 1000
+            _log_timing("+".join(hook_names), elapsed_ms, "fallback")
+        else:
+            _log_timing("+".join(hook_names), elapsed_ms, "skipped")
 
 
 if __name__ == "__main__":

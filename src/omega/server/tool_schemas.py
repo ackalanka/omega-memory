@@ -4,6 +4,12 @@ Consolidated into 15 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
 omega_briefing and omega_habits remain as backward-compat aliases in handlers.
 omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
+
+Condensed Mode (CodeMode-inspired):
+  When OMEGA_CONDENSED=1, only 5 tools are exposed: 3 standalone essentials
+  (omega_welcome, omega_protocol, omega_store) + 2 meta-tools (omega_tools,
+  omega_call). All other tools are accessible via omega_call(tool=..., args=...).
+  This reduces schema token overhead by ~80%.
 """
 
 TOOL_SCHEMAS = [
@@ -410,3 +416,169 @@ TOOL_SCHEMAS = [
         },
     },
 ]
+
+
+# ---------------------------------------------------------------------------
+# Condensed Mode (CodeMode-inspired)
+# ---------------------------------------------------------------------------
+
+# Tools that remain as standalone even in condensed mode.
+# These are called every session and benefit from zero-overhead direct invocation.
+STANDALONE_TOOLS = ["omega_welcome", "omega_protocol", "omega_store"]
+
+# Category mapping for tool discovery via omega_tools.
+# Covers core, coordination, oracle, router, profile, knowledge, and entity tools.
+TOOL_CATEGORIES = {
+    # Core memory tools
+    "omega_store": "memory",
+    "omega_query": "query",
+    "omega_welcome": "session",
+    "omega_protocol": "session",
+    "omega_checkpoint": "memory",
+    "omega_resume_task": "memory",
+    "omega_memory": "memory",
+    "omega_profile": "session",
+    "omega_remind": "operations",
+    "omega_maintain": "maintenance",
+    "omega_stats": "maintenance",
+    "omega_reflect": "intelligence",
+    "omega_consult_gpt": "intelligence",
+    "omega_consult_claude": "intelligence",
+    "omega_review": "intelligence",
+    # Backward-compat aliases
+    "omega_weekly_digest": "operations",
+    "omega_remind_list": "operations",
+    "omega_remind_dismiss": "operations",
+    # Coordination tools
+    "omega_session_register": "coordination",
+    "omega_session_heartbeat": "coordination",
+    "omega_session_deregister": "coordination",
+    "omega_sessions_list": "coordination",
+    "omega_session_snapshot": "coordination",
+    "omega_session_recover": "coordination",
+    "omega_file_claim": "coordination",
+    "omega_file_release": "coordination",
+    "omega_file_check": "coordination",
+    "omega_branch_claim": "coordination",
+    "omega_branch_release": "coordination",
+    "omega_branch_check": "coordination",
+    "omega_intent_announce": "coordination",
+    "omega_intent_check": "coordination",
+    "omega_coord_status": "coordination",
+    "omega_coord_metrics": "coordination",
+    "omega_task_create": "coordination",
+    "omega_task_claim": "coordination",
+    "omega_task_next": "coordination",
+    "omega_task_complete": "coordination",
+    "omega_task_cancel": "coordination",
+    "omega_task_fail": "coordination",
+    "omega_task_progress": "coordination",
+    "omega_task_deps": "coordination",
+    "omega_tasks_list": "coordination",
+    "omega_update_task": "coordination",
+    "omega_send_message": "coordination",
+    "omega_inbox": "coordination",
+    "omega_handoff": "coordination",
+    "omega_find_agents": "coordination",
+    "omega_audit": "coordination",
+    "omega_git_events": "coordination",
+    "omega_action_check": "coordination",
+    "omega_action_claim": "coordination",
+    "omega_action_complete": "coordination",
+    "omega_goal": "coordination",
+    "omega_goal_link": "coordination",
+    "omega_drift_check": "coordination",
+    "omega_smart_route": "coordination",
+    "omega_decision_register": "coordination",
+    "omega_decision_query": "coordination",
+    "omega_decision_revoke": "coordination",
+    "omega_council": "coordination",
+    # Oracle tools
+    "omega_oracle_record": "oracle",
+    "omega_oracle_resolve": "oracle",
+    "omega_oracle_analyze": "oracle",
+    "omega_oracle_status": "oracle",
+    # Router tools
+    "omega_route_prompt": "router",
+    "omega_classify_intent": "router",
+    "omega_router_status": "router",
+    "omega_set_priority_mode": "router",
+    "omega_get_model_config": "router",
+    "omega_switch_model": "router",
+    "omega_get_current_model": "router",
+    "omega_router_context": "router",
+    "omega_warm_router": "router",
+    "omega_router_benchmark": "router",
+    # Profile tools
+    "omega_profile_set": "profile",
+    "omega_profile_get": "profile",
+    "omega_profile_search": "profile",
+    "omega_profile_list": "profile",
+    # Knowledge tools
+    "omega_ingest_document": "knowledge",
+    "omega_search_documents": "knowledge",
+    "omega_list_documents": "knowledge",
+    "omega_remove_document": "knowledge",
+    "omega_scan_documents": "knowledge",
+    "omega_sync_kb": "knowledge",
+    # Entity tools
+    "omega_entity_create": "entity",
+    "omega_entity_get": "entity",
+    "omega_entity_list": "entity",
+    "omega_entity_update": "entity",
+    "omega_entity_delete": "entity",
+    "omega_entity_add_relationship": "entity",
+    "omega_entity_relationships": "entity",
+    "omega_entity_tree": "entity",
+}
+
+CONDENSED_TOOL_SCHEMAS = [
+    {
+        "name": "omega_tools",
+        "description": "List available OMEGA tools or get the full schema for a specific tool. Call with no args to see all tool names and descriptions. Call with tool='name' to get its full input schema so you know what arguments to pass to omega_call.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "Tool name to get full schema for. Omit to list all tools.",
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["memory", "query", "session", "maintenance", "intelligence",
+                             "operations", "coordination", "oracle", "router", "profile",
+                             "knowledge", "entity", "all"],
+                    "description": "Filter by category. Default: all.",
+                },
+            },
+        },
+    },
+    {
+        "name": "omega_call",
+        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Example: omega_call(tool='omega_query', args={'query': 'auth decisions', 'mode': 'semantic'})",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "tool": {
+                    "type": "string",
+                    "description": "Tool name to execute, e.g. 'omega_query', 'omega_checkpoint', 'omega_memory'",
+                },
+                "args": {
+                    "type": "object",
+                    "description": "Arguments to pass to the tool. Use omega_tools(tool='name') to see accepted parameters.",
+                },
+            },
+            "required": ["tool"],
+        },
+    },
+]
+
+
+def get_condensed_schemas(all_schemas: list[dict]) -> list[dict]:
+    """Return condensed tool set: standalone tools + meta-tools.
+
+    In condensed mode, only essential high-frequency tools are exposed directly.
+    All other tools are accessible via omega_call/omega_tools meta-tools.
+    """
+    standalone = [s for s in all_schemas if s["name"] in STANDALONE_TOOLS]
+    return standalone + CONDENSED_TOOL_SCHEMAS

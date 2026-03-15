@@ -45,29 +45,25 @@ class TestResolvePythonPath:
         # The result should be some valid python path string
         assert "python" in result.lower() or Path(result).exists()
 
-    def test_prefers_venv_with_omega(self, monkeypatch):
-        """If sys.executable is in a venv that has omega, it should be returned."""
+    def test_skips_venv_executable(self, monkeypatch):
+        """If sys.executable contains 'venv', it should be skipped."""
         monkeypatch.setattr(sys, "executable", "/tmp/my_venv/bin/python3")
-        with patch("omega.cli._python_has_omega", return_value=True), \
-             patch("omega.cli.Path.exists", return_value=True):
-            result = _resolve_python_path()
-        assert "my_venv" in result
+        # Should fall through to shutil.which or fallback
+        result = _resolve_python_path()
+        assert "my_venv" not in result
 
     def test_falls_back_to_which_python3(self, monkeypatch):
         """When sys.executable is empty, should try shutil.which('python3')."""
         monkeypatch.setattr(sys, "executable", "")
-        with patch("omega.cli.shutil.which", return_value="/usr/bin/python3"), \
-             patch("omega.cli._python_has_omega", return_value=True), \
-             patch("omega.cli.Path.exists", return_value=True):
+        with patch("omega.cli.shutil.which", return_value="/usr/bin/python3"):
             result = _resolve_python_path()
         assert result == "/usr/bin/python3"
 
     def test_fallback_when_nothing_works(self, monkeypatch):
         """When sys.executable is empty and shutil.which returns None, returns fallback."""
         monkeypatch.setattr(sys, "executable", "")
-        with patch("omega.cli.shutil.which", return_value=None), \
-             patch("omega.cli._python_has_omega", return_value=False), \
-             patch("omega.cli.Path.exists", return_value=False):
+        with patch("omega.cli.shutil.which", return_value=None):
+            with patch("omega.cli.Path.exists", return_value=False):
                 result = _resolve_python_path()
         # Should return "python3" as last resort (empty exe or "python3")
         assert result in ("", "python3")

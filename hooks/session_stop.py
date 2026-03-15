@@ -5,8 +5,65 @@ import os
 import sys
 import time
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+
+
+# Critical tools that agents SHOULD call at least once per session.
+# Scored: each hit = 1 point, total / len = percentage.
+CRITICAL_TOOLS = [
+    "omega_reflect",          # Contradiction/stale detection — 0 calls ever
+    "omega_decision_query",   # Check active decisions before domain work — 0 calls
+    "omega_file_check",       # Conflict check before edits — 5 calls / 931 edits
+    "omega_checkpoint",       # Save state at 70% context — 4 calls ever
+    "omega_coord_status",     # Check peers before taking work — 10 calls
+]
+
+
+def _build_utilization_report(tool_calls: list) -> dict:
+    """Score which critical OMEGA tools the agent used this session."""
+    called = set(tool_calls)
+    # Normalize: strip mcp__omega-memory__ prefix if present
+    normalized = set()
+    for t in called:
+        if t.startswith("mcp__omega-memory__"):
+            normalized.add(t.replace("mcp__omega-memory__", ""))
+        else:
+            normalized.add(t)
+
+    missed = [t for t in CRITICAL_TOOLS if t not in normalized]
+    hit_count = len(CRITICAL_TOOLS) - len(missed)
+    score = round(hit_count / len(CRITICAL_TOOLS) * 100) if CRITICAL_TOOLS else 100
+
+    # Check for verification gap: 5+ Bash calls but none matching verification patterns
+    _VERIFICATION_PATTERNS = {"pytest", "npm test", "ruff", "eslint", "gh repo view", "curl", "next build", "tsc"}
+    bash_calls = [t for t in tool_calls if t == "Bash"]
+    if len(bash_calls) >= 5:
+        # Check if any tool call looks like a verification command
+        # (tool_calls is just names, so we flag based on absence of test-like tools)
+        has_verification = any(t in normalized for t in {"pytest", "test", "lint", "build", "check"})
+        if not has_verification and "verification" not in missed:
+            missed.append("verification (0 test/build/lint commands in 5+ Bash calls)")
+
+    return {"score": score, "missed": missed, "hit": hit_count, "total": len(CRITICAL_TOOLS)}
+
+
+def _get_session_tool_names(session_id: str) -> list:
+    """Get list of tool names called in this session from coord_audit."""
+    try:
+        import sqlite3
+        db_path = os.path.expanduser("~/.omega/omega.db")
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        rows = conn.execute(
+            "SELECT DISTINCT tool_name FROM coord_audit WHERE session_id = ?",
+            (session_id,),
+        ).fetchall()
+        conn.close()
+        return [r[0] for r in rows]
+    except Exception:
+        return []
 
 
 def _log_hook_error(hook_name, error):
@@ -140,6 +197,49 @@ def _print_activity_report(session_id: str):
     except Exception:
         pass
 
+    # Utilization scorecard
+    try:
+        tool_names = _get_session_tool_names(session_id)
+        report = _build_utilization_report(tool_names)
+        if report["missed"]:
+            print(f"  Utilization: {report['score']}% ({report['hit']}/{report['total']} critical tools used)")
+            print(f"  Unused: {', '.join(report['missed'])}")
+    except Exception:
+        pass
+
+    # Check for external actions without omega_store
+    try:
+        import re as _re
+        _EXT_PATTERNS = [
+            _re.compile(r"\bgh\s+repo\s+create\b"),
+            _re.compile(r"\bgh\s+repo\s+delete\b"),
+            _re.compile(r"\bvercel\s+(?:deploy|--prod)\b"),
+            _re.compile(r"\bnpm\s+publish\b"),
+        ]
+        import sqlite3
+        db_path = os.path.expanduser("~/.omega/omega.db")
+        conn = sqlite3.connect(db_path, timeout=10)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        rows = conn.execute(
+            "SELECT tool_input FROM coord_audit WHERE session_id = ? AND tool_name = 'Bash'",
+            (session_id,),
+        ).fetchall()
+        conn.close()
+        has_external = False
+        for (tool_input_str,) in rows:
+            if tool_input_str:
+                for pat in _EXT_PATTERNS:
+                    if pat.search(tool_input_str):
+                        has_external = True
+                        break
+            if has_external:
+                break
+        if has_external and "omega_store" not in {t for t in tool_names}:
+            print("  [MISSED] External action without omega_store — outcome not persisted for future sessions.")
+    except Exception:
+        pass
+
 
 def _build_summary(session_id: str, project: str) -> str:
     """Build a session summary from per-type targeted queries.
@@ -194,6 +294,50 @@ def _build_summary(session_id: str, project: str) -> str:
     return " | ".join(parts)[:600]
 
 
+def _get_reflect_store():
+    """Lazy import store for reflection. Separated for testability."""
+    from omega.bridge import _get_store
+    return _get_store()
+
+
+# Lazy import: may be None if omega.reflect is not installed
+try:
+    from omega.reflect import find_contradictions
+except ImportError:
+    find_contradictions = None
+
+
+def _auto_reflect(session_id: str, project: str) -> dict:
+    """Run contradiction detection automatically at session end.
+    Returns summary dict with contradictions_found count."""
+    try:
+        store = _get_reflect_store()
+        result = find_contradictions(store, topic="recent decisions", limit=10)
+
+        contradictions = result.get("contradictions", [])
+        if contradictions:
+            # Store a summary for the next session to see
+            summary = f"Auto-reflect found {len(contradictions)} potential contradiction(s):\n"
+            for c in contradictions[:3]:
+                summary += f"- '{c.get('memory_a_content', '')[:80]}' vs '{c.get('memory_b_content', '')[:80]}'\n"
+
+            try:
+                from omega.bridge import auto_capture
+                auto_capture(
+                    content=summary,
+                    event_type="lesson_learned",
+                    session_id=session_id,
+                    project=project,
+                    metadata={"source": "auto_reflect", "contradiction_count": len(contradictions)},
+                )
+            except Exception:
+                pass
+
+        return {"contradictions_found": len(contradictions)}
+    except Exception:
+        return {"contradictions_found": 0}
+
+
 def _auto_feedback_on_surfaced(session_id: str):
     """Auto-record 'helpful' feedback for memories surfaced during active work."""
     if not session_id:
@@ -235,12 +379,184 @@ def _auto_feedback_on_surfaced(session_id: str):
             pass
 
 
+def _capture_usage_to_supabase(session_id: str, project_dir: str):
+    """Push session usage data from ~/.claude.json to Supabase. Fire-and-forget."""
+    if not session_id:
+        return
+    try:
+        import urllib.request
+        import urllib.error
+
+        # Read ~/.claude.json for last* session metrics
+        claude_json_path = Path.home() / ".claude.json"
+        if not claude_json_path.exists():
+            return
+
+        claude_data = json.loads(claude_json_path.read_text())
+        projects = claude_data.get("projects", {})
+
+        # Find project entry — keys are paths like "/Users/.../project"
+        project_entry = None
+        for path_key, entry in projects.items():
+            # Exact match or normalized match (avoid substring false positives)
+            if project_dir and (path_key == project_dir or path_key.rstrip("/") == project_dir.rstrip("/")):
+                project_entry = entry
+                break
+
+        if not project_entry:
+            return
+
+        last_session_id = project_entry.get("lastSessionId", "")
+        # Only capture if this matches our session (avoid stale data)
+        if last_session_id and last_session_id != session_id:
+            # Fall back: use the data anyway if session_id looks like a subagent
+            if not session_id.startswith("agent-"):
+                return
+
+        # Load Supabase credentials
+        sb_url = os.environ.get("SUPABASE_URL", "")
+        sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+        if not sb_url or not sb_key:
+            env_file = Path.home() / "Projects" / "omega" / "website" / ".env.local"
+            if env_file.exists():
+                for line in env_file.read_text().splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, _, v = line.partition("=")
+                    k = k.strip()
+                    v = v.strip().strip('"').strip("'")
+                    if k == "SUPABASE_URL" and not sb_url:
+                        sb_url = v
+                    elif k == "SUPABASE_SERVICE_ROLE_KEY" and not sb_key:
+                        sb_key = v
+        if not sb_url or not sb_key:
+            return
+
+        # Extract project name from path
+        project_name = Path(project_dir).name if project_dir else None
+
+        # Build model cost breakdown from lastModelUsage
+        model_usage = project_entry.get("lastModelUsage", {})
+        cost_by_model = {}
+        for model_id, stats in model_usage.items():
+            cost = stats.get("costUSD", 0)
+            if cost:
+                # Readable name preserving version: "claude-opus-4-6" -> "Opus 4.6"
+                short_name = model_id
+                lower = model_id.lower()
+                if "opus" in lower:
+                    ver = lower.split("opus-")[-1].split("-")[0] if "opus-" in lower else ""
+                    short_name = f"Opus {ver}" if ver else "Opus"
+                elif "sonnet" in lower:
+                    ver = lower.split("sonnet-")[-1].split("-")[0] if "sonnet-" in lower else ""
+                    short_name = f"Sonnet {ver}" if ver else "Sonnet"
+                elif "haiku" in lower:
+                    ver = lower.split("haiku-")[-1].split("-")[0] if "haiku-" in lower else ""
+                    short_name = f"Haiku {ver}" if ver else "Haiku"
+                # Accumulate cost if same short name appears (e.g. from multiple sub-versions)
+                cost_by_model[short_name] = round(cost_by_model.get(short_name, 0) + cost, 6)
+
+        # Compute session timestamps from duration
+        duration_ms = project_entry.get("lastDuration", 0)
+        duration_s = round(duration_ms / 1000, 2) if duration_ms else None
+        now = datetime.now(timezone.utc)
+        session_end = now.isoformat()
+        session_start = None
+        if duration_ms:
+            session_start = (now - timedelta(milliseconds=duration_ms)).isoformat()
+
+        # Try to read rich metadata from session-summaries.jsonl
+        files_modified = []
+        tasks_completed = []
+        git_commits = []
+        try:
+            summaries_path = Path.home() / ".claude" / "session-summaries.jsonl"
+            if summaries_path.exists():
+                # Read last line matching this session_id
+                for line in reversed(summaries_path.read_text().splitlines()):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        s = json.loads(line)
+                        sid = s.get("sessionId") or s.get("id", "")
+                        if sid == session_id:
+                            files_modified = s.get("filesModified", [])
+                            tasks_completed = s.get("tasksCompleted", [])
+                            git_commits = s.get("gitCommits", [])
+                            # Use more precise timestamps if available
+                            if s.get("startTime"):
+                                session_start = s["startTime"]
+                            if s.get("endTime"):
+                                session_end = s["endTime"]
+                            break
+                    except json.JSONDecodeError:
+                        continue
+        except Exception:
+            pass
+
+        row = {
+            "session_id": session_id,
+            "project_name": project_name,
+            "project_path": project_dir,
+            "total_cost_usd": project_entry.get("lastCost", 0),
+            "input_tokens": project_entry.get("lastTotalInputTokens", 0),
+            "output_tokens": project_entry.get("lastTotalOutputTokens", 0),
+            "cache_read_tokens": project_entry.get("lastTotalCacheReadInputTokens", 0),
+            "cache_miss_tokens": project_entry.get("lastTotalCacheCreationInputTokens", 0),
+            "duration_seconds": duration_s,
+            "cost_by_model": json.dumps(cost_by_model),
+            "files_modified": json.dumps(files_modified[:50] if isinstance(files_modified, list) else []),
+            "tasks_completed": json.dumps(tasks_completed[:20] if isinstance(tasks_completed, list) else []),
+            "git_commits": json.dumps(git_commits[:20] if isinstance(git_commits, list) else []),
+            "session_start": session_start,
+            "session_end": session_end,
+        }
+
+        url = f"{sb_url}/rest/v1/session_usage?on_conflict=session_id"
+        headers = {
+            "apikey": sb_key,
+            "Authorization": f"Bearer {sb_key}",
+            "Content-Type": "application/json",
+            "Prefer": "resolution=merge-duplicates",
+        }
+        body = json.dumps([row]).encode("utf-8")
+        req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+        urllib.request.urlopen(req, timeout=3)
+
+    except Exception as e:
+        _log_hook_error("capture_usage_supabase", e)
+
+
 def main():
     session_id = os.environ.get("SESSION_ID", "")
     project = os.environ.get("PROJECT_DIR", os.getcwd())
 
+    _capture_usage_to_supabase(session_id, project)
     _auto_feedback_on_surfaced(session_id)
     _print_activity_report(session_id)
+
+    # Auto-reflect: detect contradictions (Part C — omega_reflect has 0 agent calls)
+    try:
+        reflect_result = _auto_reflect(session_id, project)
+        if reflect_result["contradictions_found"] > 0:
+            print(f"  Auto-reflect: {reflect_result['contradictions_found']} contradiction(s) detected. Check next session start.")
+    except Exception:
+        pass
+
+    # Cloud push fallback — when the hook_server is down (OOM), this fast_hook
+    # path is the only session_stop that fires. Push to cloud here too.
+    try:
+        from omega.cloud.sync import get_sync
+        get_sync().sync_all()
+        push_marker = Path.home() / ".omega" / "last-cloud-push"
+        push_marker.write_text(datetime.now(timezone.utc).isoformat())
+    except Exception:
+        pass  # Fail-open: cloud push is best-effort
+
+    if os.environ.get("OMEGA_NO_SESSION_SUMMARY", "").strip() == "1":
+        return
 
     summary = _build_summary(session_id, project)
 

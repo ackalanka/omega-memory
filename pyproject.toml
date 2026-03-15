@@ -1,31 +1,12 @@
 [project]
 name = "omega-memory"
-version = "1.3.0"
+version = "1.2.0"
 description = "Local-first intelligence layer for AI agents — memory, coordination, and learning on your machine"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "Apache-2.0"
 authors = [
-    {name = "Kokyō Keishō Zaidan Stichting", email = "omega-memory@proton.me"},
-]
-keywords = [
-    "mcp-server",
-    "claude-code",
-    "cursor",
-    "windsurf",
-    "ai-agents",
-    "memory",
-    "persistent-memory",
-    "semantic-search",
-    "knowledge-graph",
-    "coding-assistant",
-    "openai",
-    "anthropic",
-    "langchain",
-    "vector-search",
-    "embeddings",
-    "developer-tools",
-    "context-persistence",
+    {name = "Kokyō Keishō Zaidan Stichting", email = "hello@omega-memory.dev"},
 ]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -36,11 +17,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Software Development :: Libraries",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Topic :: Scientific/Engineering :: Artificial Intelligence",
-    "Topic :: Database",
-    "Typing :: Typed",
-    "Environment :: Console",
 ]
 dependencies = [
     "onnxruntime>=1.18.0",
@@ -53,18 +29,37 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://omegamax.co"
-Documentation = "https://omegamax.co/how-it-works"
-Repository = "https://github.com/omega-memory/omega-memory"
-Changelog = "https://github.com/omega-memory/omega-memory/blob/main/CHANGELOG.md"
-Issues = "https://github.com/omega-memory/omega-memory/issues"
+Homepage = "https://github.com/omega-memory/omega"
+Repository = "https://github.com/omega-memory/omega"
+Documentation = "https://omega-memory.github.io/omega/"
+Changelog = "https://github.com/omega-memory/omega/blob/main/CHANGELOG.md"
+Issues = "https://github.com/omega-memory/omega/issues"
 
 [project.optional-dependencies]
-server = ["mcp>=1.0.0"]
+server = ["mcp>=1.0.0", "starlette>=0.36.0", "uvicorn>=0.27.0"]
 encrypt = ["cryptography>=41.0.0", "keyring>=25.0.0"]
-dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff", "commitizen>=4.1", "mypy>=1.8.0"]
-docs = ["mkdocs-material>=9.0.0"]
+router = []
+bridge = ["fastapi>=0.110.0", "uvicorn>=0.27.0"]
+knowledge = []
+knowledge-pdf = ["omega-memory[knowledge]", "docling>=2.0.0", "pdfplumber>=0.10.0"]
+knowledge-pdf-lite = ["omega-memory[knowledge]", "pdfplumber>=0.10.0"]
+entity = ["omega-memory[encrypt]"]
+cloud = ["supabase>=2.0.0"]
+remote = ["fastmcp>=3.0.0", "pyjwt[crypto]>=2.8.0", "httpx>=0.27.0"]
+patterns = ["scikit-learn>=1.3.0", "prefixspan>=0.5.0"]
+full = [
+    "omega-memory[server]",
+    "omega-memory[router]",
+    "omega-memory[encrypt]",
+    "omega-memory[bridge]",
+    "omega-memory[remote]",
+    "omega-memory[knowledge]",
+    "omega-memory[entity]",
+    "omega-memory[cloud]",
+]
 benchmark = ["openai>=1.0.0", "sentence-transformers>=2.2.0"]
+docs = ["mkdocs-material>=9.0.0"]
+dev = ["pytest", "pytest-asyncio", "pytest-cov", "ruff", "commitizen>=4.1", "mypy>=1.8.0"]
 
 [project.scripts]
 omega = "omega.cli:main"
@@ -94,10 +89,22 @@ target-version = "py311"
 line-length = 120
 
 [tool.ruff.lint]
+# Pre-existing issues to clean up incrementally
 ignore = [
     "E402",   # module-import-not-at-top (lazy imports by design)
     "E721",   # type-comparison (pre-existing)
     "E741",   # ambiguous-variable-name (pre-existing)
-    "F841",   # unused-variable (pre-existing)
+    "F841",   # unused-variable (pre-existing, 6 instances)
     "F821",   # undefined-name (pre-existing, dynamic imports)
 ]
+
+[tool.commitizen]
+name = "cz_conventional_commits"
+version = "1.0.0"
+tag_format = "v$version"
+version_files = [
+    "pyproject.toml:version",
+    "src/omega/__init__.py:__version__",
+]
+changelog_start_rev = "v0.3.0"
+update_changelog_on_bump = true

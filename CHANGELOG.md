@@ -1,307 +1,447 @@
 # Changelog
 
-All notable changes to OMEGA (`omega-memory`) will be documented in this file.
+All notable changes to OMEGA will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-03-09
+### Added
+- **Code review (`omega_review`)**: Multi-agent specialist review panel with 5 agents
+  (correctness, security, performance, consistency, blast radius). Hybrid static+LLM
+  analysis: 12 deterministic pattern checks (zero false positives) plus LLM for novel
+  issues. Memory-powered: uses OMEGA conventions, past incidents, and team preferences
+  for context. Confidence gating with strict/normal/verbose modes. Fast `summarize_only`
+  mode for risk assessment without LLM. Pre-commit hook at `hooks/pre_review.py`.
+  Standalone engine: [omega-memory/revue](https://github.com/omega-memory/revue).
+
+## [1.2.0] - 2026-03-04
+
+### Added
+- **Hooks in wheel**: Claude Code hooks now ship inside the pip package; `omega hooks setup`
+  auto-configures `~/.claude/settings.json` with correct paths
+- **Multi-user auth**: Google Sign-In, role-based access control, self-service onboarding wizard,
+  per-user data scoping across all admin API routes
+- **Auth guards**: 46 API routes hardened with session verification
+- **LLM provider abstraction**: Unified `llm.py` (Python) and `lib/llm.ts` (TypeScript) supporting
+  Anthropic, OpenAI, and OpenAI-compatible providers via `OMEGA_LLM_PROVIDER`
+- **LLM usage tracking**: Per-call cost tracking with session rollups and admin dashboard
+- **Multi-model consultation**: `omega_consult_gpt` and `omega_consult_claude` tools for
+  cross-model second opinions (replaces `omega_lessons`)
+- **Growth engine**: Thompson Sampling bandit for content optimization, attribution engine
+  correlating X metrics with GitHub/PyPI, content genome pipeline
+- **Scheduled jobs infrastructure**: State machine with retry logic, approval gates,
+  audit trail, SLA escalation, heartbeat monitoring, Vercel cron migration
+- **Query expansion**: LLM-based retrieval augmentation with strong-signal short-circuit
+  and position-aware reranking (QMD-inspired)
+- **System insights**: Permanent-TTL insight memories with protocol surfacing, file-triggered
+  hooks, and admin graph visualization
+- **Trajectory distillation**: Auto-extracts session summaries at session stop with quality gate
+- **Project registry**: Unified canonical projects table with status tracking and
+  auto-generation at session stop
+- **Schema v13**: Unique index on forgetting_log to prevent duplicate entries
+- **Coordination upgrades**: File claim gap closed with read tracking, peer-claimed commit
+  blocking, auto-handoff on session stop, message priority
+- **Admin dashboard**: Projects tab, LLM Usage tab, Entities tab, Conductor Console,
+  Growth tab, Settings expansion (Profile, Agent, Memory, Projects, Integrations)
+- **Website**: Next.js 16.1.6, homepage restructure, /pro page redesign, 6 new blog posts,
+  HeroGraph visualization
+- **Automation**: Target scanner, scan-and-reply cron, daily summary email,
+  @omega_memory multi-account infrastructure
 
 ### Changed
-- **Version bump to 1.x**: OMEGA is stable and production-ready. Adopting semantic
-  versioning 1.x to signal API stability.
-- Synced core files from upstream (preferences.py, test_types.py, plugins.py)
+- sqlite_store.py split into mixin-based package (7 modules) for maintainability
+- Oracle engine upgraded to thread-safe singleton
+- Hook system abstracted for multi-client support (Claude Code, Cursor, Windsurf, Cline)
+- Protocol adapted for multi-model providers with provider-specific notes
+- Admin theme refined (violet accent, semantic signal colors)
 
 ### Fixed
-- **Security**: Removed pro-only files (protocol.py, license.py) that were
-  accidentally included in the public repository
+- ~176 bug fixes across security, admin, knowledge, bridge, entities, growth, LLM routing
+- Multi-user data isolation across 29 API routes
+- Thread-safety issues in oracle and embedding engines
+- Knowledge base: SSRF prevention, entity filtering, race conditions
+- Bridge: full memory ID returned from dedup/evolve/reconfirm paths
+- Cloud sync hardening and expanded test coverage
 
-## [0.12.0] - 2026-03-04
+### Removed
+- SayDo experimental module (archived)
+- `omega_lessons` tool (replaced by `omega_consult_gpt`/`omega_consult_claude`)
+
+## [1.1.0] - 2026-02-25
 
 ### Added
-- **Hooks in wheel**: Claude Code hooks now ship inside the pip package; previously
-  pip-installed users got broken hook errors because fast_hook.py was excluded
-- **`omega hooks` CLI**: New subcommand with three modes:
-  - `omega hooks setup` — auto-configures ~/.claude/settings.json with correct paths
-  - `omega hooks path` — prints the hooks directory (machine-readable)
-  - `omega hooks doctor` — diagnoses broken paths in hook config
-- Shared `_resolve_hooks_src()` helper for consistent hook path resolution
+- Automatic entity extraction from conversations (Phase 3) with async processing
+  and throttle controls
+- Bi-temporal data model with `valid_from`/`valid_until` for point-in-time queries
+- Memory strength scoring with decay, deduplication, and `strength_min` query filter
+- Memory type classification — auto-classifies on store, filterable via `memory_type`
+  parameter in omega_query
+- Contradiction detection surfaced in store output
+- Intelligence cards — compact [OMEGA] cards for memory, decision, and learning events
+  at NORMAL+ transparency
+- Entity graph relationships wired into retrieval scoring
+- Campaign Orchestrator v3.0 (Layers 1-3) with automation modules and proposal feed
+- MCP server instructions for automatic memory usage by connected agents
+- Session awareness and agent discipline protocol sections (v1.3.0)
+- Admin dashboard: 3D Memory Graph visualization with bloom and clustering
+- Admin dashboard: Interactive entity knowledge graph
+- Admin dashboard: Skills Graph 3D visualization with manifest and API
+- Admin dashboard: KnowledgeBase rewrite with folder tree, markdown preview,
+  and breadcrumb navigation
+- Admin dashboard: Orchestrator proposals feed, ambient awareness layer,
+  historical coordination view
+- Admin dashboard: Recharts-based Insights tab with memory sparklines and
+  project charts
+- Security hardening — shared validation module, coordinator handler hardening,
+  write-tool rate limiting, CI dependency auditing, Dependabot
+- Windows installer improvements and repair utility
+- Website: downloads page, competitive positioning, OpenAI comparison blog post,
+  dual-account tweet generation
 
 ### Changed
-- `omega setup` now uses `_resolve_hooks_src()` instead of inline path logic
+- Extracted shared `mcp_response`/`mcp_error` helpers to reduce duplication
+  across server handlers
+- Generate button switched from SSE to job polling for reliability
+- Tweet pipeline migrated to EST with slot optimization and reply queue
+- Heavy cron jobs migrated from Vercel to GitHub Actions
 
 ### Fixed
-- Hooks excluded from wheel due to missing `__init__.py` in `src/omega/hooks/`
+- SQLite lock contention reduced with `BEGIN IMMEDIATE` transactions and
+  WAL checkpoint logic
+- Connection leak in `record_metric` eliminated with hardened close/reconnect
+- Stale embedding backend state causing `tuple.encode()` crash resolved
+- Hook resilience improved — retry on startup race, skip informational hooks
+  in fallback mode
+- JIT proxy: bypass MCP SDK 1.26 `outputSchema` validation errors
+- Router intent classifier no longer unconditionally overwrites session task
+- Cloud sync: per-document error isolation with timeout config
+- FTS5 query sanitization hardened against malformed input
 
-## [0.11.1] - 2026-03-03
-
-### Fixed
-
-- Fixed browse and flagged-memory queries returning integer row IDs instead of string node IDs, causing TypeError crashes when formatting results.
-- Fixed 7 CLI commands crashing with ImportError on community edition when pro-only modules (`omega.knowledge`, `omega.cloud`, `omega.license`, `omega.server.http_server`) are not installed.
-
-### Added
-
-- 91 new tests covering bridge helper functions (`_extract_facts`, `_auto_relate`, `_detect_and_supersede`, `_split_atomic_facts`) and handler actions (`omega_reflect`, `omega_memory`, `omega_stats`, `omega_browse`).
-- Updated integration test assertions to match current tool and handler counts.
-
-## [0.11.0] - 2026-03-03
+## [1.0.0] - 2026-02-13
 
 ### Added
-
-- **New tool: `omega_reflect`** -- Self-evaluation tool that reviews recent memories and surfaces patterns, contradictions, and gaps in your knowledge graph.
-- **New tool: `omega_consult_gpt`** -- Multi-LLM consultation: ask GPT-4 for a second opinion on a question, with OMEGA context automatically included.
-- **New tool: `omega_consult_claude`** -- Multi-LLM consultation: ask Claude for a second opinion, with OMEGA context automatically included.
-- **Auto-relate with typed edges** -- Memories are now linked with typed relationship edges (`related`, `supersedes`, `contradicts`, `refines`, `supports`) during ingestion, improving graph traversal and retrieval accuracy.
-- **Contradiction supersession** -- When a new decision contradicts an existing one, the older memory is automatically superseded with a `contradicts` edge.
-- **Atomic fact splitting** -- Compound memories are automatically decomposed into individual fact nodes, improving retrieval precision for targeted queries.
-- **Query expansion** -- Queries are automatically expanded with related terms for better recall on ambiguous or short searches.
-- **Temporal queries** -- `omega_query` now supports time-scoped retrieval via `valid_at` parameter.
-- **Browse mode for `omega_query`** -- New `mode="browse"` option for open-ended exploration of your memory graph by type, session, or recency.
-- **Enhanced `omega_memory` actions** -- New actions: `link` (create typed edges between memories), `flagged` (list memories flagged for review), `supersede` (manually supersede a memory).
-- **Enhanced `omega_stats` actions** -- New actions: `forgetting_log`, `dedup`, `milestones`, `habits` (usage pattern analysis).
-- **RSS watchdog** -- Background process monitor that detects runaway memory usage and gracefully exits before OOM.
-- **SQLite executor** -- Dedicated thread pool executor prevents GIL+GC race conditions under concurrent access (SIGSEGV fix).
-- **Rotating log files** -- Server logs now rotate automatically (5 MB cap, 3 rotations) to prevent disk fill.
-- **Community-edition protocol** -- `omega_protocol` tool now returns useful operating guidelines for community users.
+- Open-core plugin architecture (OmegaPlugin base class, discover_plugins())
+- Graceful degradation for all optional modules (coordination, router, entity, knowledge, profile, cloud)
+- Apache-2.0 license
+- GitHub Actions CI/CD (test matrix: Python 3.11, 3.12, 3.13)
+- PyPI publish workflow with trusted publishers
+- CONTRIBUTING.md, SECURITY.md, NOTICE
+- Issue and PR templates
 
 ### Changed
+- License: MIT → Apache-2.0
+- Author: → Kokyō Keishō Zaidan Stichting
+- Hook server: conditional coordination handler registration
+- CLI: graceful "requires omega-pro" messages for commercial modules
+- MCP server: commercial tool schemas loaded only when modules available
+- Version bump: 0.6.1 → 1.0.0
 
-- **Extended TTL system** -- Long-term memories now persist for 90 days (was 2 weeks). Decisions and advisor insights are permanent (never expire). Session summaries upgraded from ephemeral to long-term.
-- **Improved dedup thresholds** -- Added type-specific dedup thresholds for constraints (0.90), advisor insights (0.75), user facts (0.80), and skill templates (0.85).
-- **Consolidate default** -- `omega_consolidate` now defaults to 14-day prune window (was 30 days).
+## [0.6.1] - 2026-02-11
 
-### Fixed
-
-- Cross-session dedup now correctly handles decisions and insights restated across sessions.
-- Blocklist no longer incorrectly filters `user_preference` and `user_fact` memories.
-- Evolution threshold reduced to 1 new word (was 3), allowing incremental knowledge updates.
-- `find_similar()` filters expired and superseded memories with 2x over-fetch.
-- All `logger.error()` calls now include `exc_info=True` for better tracebacks.
-- Socket watchdog validates socket responsiveness instead of just checking existence.
-
-## [0.10.8] - 2026-02-24
-
-### Fixed
-
-- Test fixture: `CoordinationManager` in conftest.py now passes `cloud_sync=False` to prevent cloud sync attempts during tests.
-- `__init__.py` version string now matches `pyproject.toml` (was stuck at 0.10.6).
-
-## [0.10.7] - 2026-02-24
-
-### Added
-
-- MCP server now sends instructions during initialization telling Claude to call `omega_welcome()` and use memory tools proactively. Removes need for manual project instruction configuration in Claude Desktop.
-- Synced core files from private repo: `hooks-core.json`, `task_utils.py`, `test_improvements.py`, `test_sqlite_store.py`.
-- Pro-only test guards (`_skip_pro`) added to `test_sqlite_store.py` for features that depend on pro-only infrastructure.
-
-## [0.10.6] - 2026-02-20
-
-### Added
-
-- WAL checkpoint management: TRUNCATE on init, PASSIVE on close, and periodic PASSIVE checkpoint every N writes (configurable via `OMEGA_WAL_CHECKPOINT_INTERVAL` env var). Prevents unbounded WAL growth under multi-process contention.
-- Auto-backup on startup: creates a JSON backup when the most recent is >24h old, keeps max 5 rotated in `~/.omega/backups/`.
-- `_run_sql()` retry wrapper for individual SQL statements under lock contention.
-- Thread-safe query cache with `_cache_lock` protecting all reads/writes.
-- Smart partial cache invalidation: only evicts cache entries with trigram overlap >= 0.20 with new content, instead of full wipe.
-
-### Fixed
-
-- `find_similar()` now filters expired and superseded memories, with 2x over-fetch to maintain result count.
-
-## [0.10.5] - 2026-02-20
-
-### Added
-
-- Windows/WSL installation guide in README with step-by-step setup and 5 WSL-specific gotchas.
-- `src/omega/db_utils.py` shared SQLite retry helpers (`retry_on_locked`, `retry_write_on_locked`) for database-locked error recovery.
-
-### Fixed
-
-- SQLite connections in CLI commands now use `timeout=30` to prevent WAL lock hangs under multi-process contention. Doctor health checks use `timeout=5`.
-- `SESSION_START` surfacing thresholds broadened (0.60/0.45/0.15 to 0.45/0.40/0.10) for better context at session startup.
-- Three noise filters added to auto-capture: infrastructure events, zero-token outcomes, and JSON blob decisions.
-- Cross-session dedup exception for decisions (same decision restated across sessions now correctly deduplicates).
-- Shortened capture output messages ("Deduped", "Evolved") for cleaner hook output.
-- Lowered dedup thresholds: session summaries 0.95 to 0.75, decisions 0.85 to 0.80.
-- `exc_info=True` added to all `logger.error()` calls in bridge.py.
-
-## [0.10.4] - 2026-02-20
-
-### Added
-
-- Full `--json` test coverage for `query`, `status`, `timeline`, `stats`, and `activity` CLI commands (closes #9).
+### Removed
+- **Phoenix module deleted** — 1,531 lines source + 1,152 lines tests. Fully disconnected dead code: no hooks triggered it, no workflows called its 6 MCP tools, respawn requests wrote to JSON files nothing read. Session context handoff already handled by coordinator's snapshot/recover system.
+- 6 MCP tools removed: `omega_phoenix_check`, `omega_phoenix_request`, `omega_phoenix_complete`, `omega_phoenix_requests`, `omega_phoenix_handoff`, `omega_phoenix_metrics`
+- `[phoenix]` optional dependency group from pyproject.toml
 
 ### Changed
+- MCP tool count: 60 (was 66)
+- Test count: 1406 across 29 test files (was 1447 across 31)
+- Renamed `_phoenix_recovery` → `_session_resume` in hook_server.py (pure coordinator logic, no Phoenix dependency)
+- `[PHOENIX]` label → `[RESUME]` in coord handler output
 
-- Session summary TTL changed from SHORT_TERM to EPHEMERAL (1h) to prevent accumulation.
-- Generic `memory` type TTL changed from LONG_TERM to SHORT_TERM (1d) for faster expiry.
-- `consolidate` prune_days default lowered from 30 to 14 days.
-- Added `exc_info=True` to all 30 `logger.error()` calls in handlers for better tracebacks.
-- Eliminated all `datetime.utcnow()` deprecation warnings (Python 3.12+).
-
-## [0.10.3] - 2026-02-20
-
-### Changed
-
-- Removed noisy stderr warning when ONNX model is not downloaded (logger.warning still fires for debugging).
-- Version alignment: `__init__.py` and `pyproject.toml` now both report 0.10.3.
-
-## [0.10.0] - 2026-02-16
-
-### Changed
-
-- **MCP is now an optional dependency.** `pip install omega-memory` installs the core library only (storage, retrieval, embeddings). For MCP server integration with Claude Code, Cursor, Windsurf, or Zed, install with `pip install omega-memory[server]`. This reduces the base install size and eliminates the MCP server process for users who only need the Python API.
-- **Expanded public Python API.** 9 new functions exported from the top-level `omega` package: `batch_store`, `record_feedback`, `deduplicate`, `get_session_context`, `get_activity_summary`, `create_reminder`, `list_reminders`, `dismiss_reminder`, `get_due_reminders`.
+## [0.5.0] - 2026-02-10
 
 ### Added
-
-- **`omega setup --hooks-only`** configures Claude Code hooks and CLAUDE.md without registering the MCP server, saving ~600MB RAM per session. Hooks call bridge.py directly.
-- **Direct Python API** for scripts, CI/CD, and automation without running an MCP server:
-  ```python
-  from omega import store, query, remember
-  store("Always use TypeScript strict mode", "user_preference")
-  results = query("TypeScript preferences")
-  ```
-- MCP import guard in `mcp_server.py` prints a clear error message with install instructions if the `mcp` package is missing.
-
-### Migration
-
-If you use OMEGA with an MCP client (Claude Code, Cursor, etc.), update your install command:
-
-```bash
-# Before (0.9.x)
-pip install omega-memory
-
-# After (0.10.0+)
-pip install omega-memory[server]
-```
-
-If you only use OMEGA as a Python library, `pip install omega-memory` continues to work and is now lighter.
-
-## [0.9.0] - 2026-02-15
-
-### Added
-
-- **Contradiction detection** — ingest-side intelligence that auto-detects conflicting memories on store. When a new decision contradicts an existing one, the older memory is automatically superseded with a `contradicts` relationship edge, keeping the knowledge graph consistent without manual cleanup.
-- **Atomic fact splitting** — compound memories (e.g. "Project uses React and deploys to Vercel") are automatically decomposed into individual fact nodes during ingestion, improving retrieval precision for targeted queries.
-- **Corpus hygiene** — automated deduplication of near-duplicate memories, reducing noise and token waste in search results over long-lived sessions.
-- **Compact MCP tool responses** — all MCP tool responses optimized for token efficiency, reducing context window consumption when agents interact with OMEGA.
-
-## [0.8.0] - 2026-02-14
-
-### Added
-
-- **`omega status --json`** — machine-readable JSON output for scripted access to memory count, DB size, model status, and vector search availability.
-- **`omega export`** — export memories to a JSON file, with optional `--type` filter (e.g. `omega export --type decision decisions.json`).
-- **`omega import`** — import memories from a JSON file, with optional `--clear` to replace existing data.
+- Router auto-warmup on session start, auto-classify on every user prompt
+- Router provider status surfaced in welcome briefing
+- Groq re-added for simple_edit intent (speed mode)
+- 1122+ tests across 28 test files, 0 lint errors
 
 ### Changed
+- Router classifier status checked on start, hot-reload on config change
 
-- **CONTRIBUTING.md** — expanded with full dev setup, test commands, code style guide, MCP server testing instructions, project structure, and PR process.
+## [0.4.3] - 2026-02-10
 
-## [0.7.3] - 2026-02-14
+### Changed
+- **Router rewired**: xAI/Grok-4 as primary for exploration intent (research/AI trends), Google/Gemini as fallbacks, Groq re-added for simple_edit (speed mode)
+- **Router secrets**: API keys loaded from `~/.omega/secrets.json` — 5/5 providers active (Anthropic, OpenAI, Google, xAI, Groq)
+- CI matrix: dropped Python 3.10 (unsupported), added 3.13
+- Removed phantom `litellm` dependency from router extras (was never imported)
+- Fixed commitizen `changelog_start_rev` to existing tag `v0.3.0`
 
 ### Fixed
-
-- **Welcome briefing false positive** — model-missing warning in `omega_welcome` now checks for model files on disk instead of backend activation state, which is lazy-loaded and always None at welcome time.
-
-## [0.7.2] - 2026-02-14
-
-### Fixed
-
-- **Missing model warning** — when the ONNX embedding model is not downloaded, OMEGA now shows a clear actionable error ("Run 'omega setup' to download the model") instead of silently falling back to degraded text-only search. Warnings appear in CLI queries, model loading, and the MCP welcome briefing.
-
-## [0.7.1] - 2026-02-14
-
-### Fixed
-
-- **MiniLM model download** — tokenizer and config files were fetched from the wrong HuggingFace path (`onnx/` subdirectory instead of repo root), causing 404 errors during `omega setup` for first-time users without the bge model.
-
-## [0.7.0] - 2026-02-14
+- 105 ruff lint errors across src/ and tests/ (unused imports, f-strings without placeholders)
+- `pre_push_guard` test subprocess import path
+- `auto_claim_branch` path validation
+- Feedback score inflation: clamped to valid range
+- Unbounded state growth in coordination audit log
+- Stale Haiku model ID updated in router defaults
+- Deprecated `datetime.utcnow()` replaced with timezone-aware alternative
+- Missing thread lock in coordination cleanup path
 
 ### Added
+- 31 new tests: migration, reingest, reembed, lessons, classifier, concurrency coverage gaps
+- Updated SCORECARD.md to v0.4.3 with post-cleanup metrics (242 memories, 4/5 providers)
+- **README rewrite for public audience**: problem statement, 60-second quickstart, comparison table (vs Mem0/Zep/Copilot Memory), collapsible advanced details, contributing section, PyPI badge
+- README: corrected test count (1074→1102), tool counts (22 memory + 25 coord), hooks (11)
+- CONTRIBUTING.md: updated test count (1074→1102)
+- SECURITY.md: added 0.3.x and 0.4.x to supported versions
 
-- **Multi-client setup** — `omega setup --client cursor|windsurf|zed` writes MCP config to each editor's config file. Claude Code remains the default with full hooks and instruction injection.
-  - Cursor: `~/.cursor/mcp.json`
-  - Windsurf: `~/.codeium/windsurf/mcp_config.json`
-  - Zed: `~/.config/zed/settings.json`
+### Removed
+- 162 stale Gnosis-era memory artifacts (506→242 memories)
+- Dead code paths identified in diagnostic audit
+
+## [0.4.2] - 2026-02-10
+
+### Added
+- **Unified hook system**: all 11 hooks via `fast_hook.py` → daemon UDS dispatch
+- `pre_push_guard` migrated from standalone script to daemon handler (12 handlers total)
+- `_SLOW_HOOKS` set with configurable timeout in `fast_hook.py`
+- 37 new batch protocol tests (daemon batch, client batch, fallback short-circuit, log format)
+- 4 UAT test suites: memory (10 scenarios), router (4), cross-module (4) — 2,153 lines
+- 83 new tests in `test_cli.py` and `test_graphs_coverage.py`
+
+### Fixed
+- Thread lock added to `get_node()` in sqlite_store.py (race condition on access_count)
+- Null-guard on access_count arithmetic in bridge.py dedup path
+- 19 bare `except: pass` replaced with specific exceptions + debug logging
+- `cleanup_old_requests()` now uses `max_age_days` parameter (was ignored)
+- Merged 3 separate `store.query()` calls into 1 in `auto_capture()` (saves 2 embedding generations)
+
+### Removed
+- Dead `HAS_NUMPY` variable from graphs.py
+- Dead `get_model_history()` stub from router/engine.py
+
+## [0.4.1] - 2026-02-10
+
+### Fixed
+- `omega doctor` now loads sqlite-vec extension before checking vec index
+- Circuit breaker cooldown recovery: embeddings resume after transient failures
+- Orphaned vec index entries cleaned up on startup
+
+## [0.4.0] - 2026-02-10
+
+### Added
+- **Router module** (10 MCP tools): multi-LLM intent classification and routing
+  - ONNX prototype classifier (<2ms, no ML deps beyond existing bge-small)
+  - 5 intents: coding, creative, logic, exploration, simple_edit
+  - 5 providers: Anthropic, OpenAI, Google, Groq, xAI
+  - 4 priority modes: cost, speed, quality, balanced
+  - Context affinity tracking with switch penalties
+  - Large context override (>100K tokens → Gemini)
+  - `omega_route_prompt`, `omega_classify_intent`, `omega_router_status`, `omega_set_priority_mode`, `omega_switch_model`, `omega_get_model_config`, `omega_get_current_model`, `omega_router_context`, `omega_warm_router`, `omega_router_benchmark`
+- `filter_tags` parameter for `omega_query` with AND-logic hard filtering
+- CLI `compact` and `stats` subcommands
+- `scripts/migrate_magma.py` for Gnosis MAGMA → OMEGA migration
+- README rewrite covering all tools, architecture diagram, install flow
 
 ### Changed
+- MCP tool count: 47 → 57 (+10)
+- Optional module loading: `try/except ImportError` in mcp_server.py
+- `pyproject.toml`: router/full optional dependency groups
+- Total tests: 779
 
-- Setup auto-detect now lists all supported clients when Claude Code is not found.
-
-## [0.6.1] - 2026-02-14
+## [0.3.2] - 2026-02-10
 
 ### Added
-
-- **Entity auto-capture** — `resolve_project_entity()` wired into `bridge.auto_capture()` for automatic entity scoping.
-- **Smithery.yaml** — configuration file for Smithery.ai directory listing.
-- **Demo GIF** — animated terminal demo in README showing cross-session memory recall.
+- `filter_tags` parameter on `query_structured` (AND-logic, 3x over-fetch)
+- 4 utilization gaps closed: auto-tags on store, confidence thresholds, plan capture triggers
+- `pre_push_guard` enhancements: checkout target parsing, branch claim checks
 
 ### Changed
+- Hooks manifest aligned with active coordination hooks
+- Utilization scorecard: grade improved from C+ to A- (gap 0.3)
 
-- README restructured: leads with problem statement, demo GIF, and examples section.
-
-### Fixed
-
-- **SQLite lock contention** — increased `busy_timeout` from 5s to 30s and added retry-with-backoff on all write paths. Fixes "database is locked" errors when multiple Claude Code sessions share the same `omega.db`.
-
-## [0.6.0] - 2026-02-13
+## [0.3.1] - 2026-02-10
 
 ### Added
+- **24 coordination MCP tools re-enabled**: sessions, file/branch claims, intents, tasks, messaging, audit
+- `pre_task_guard` hook: blocks edits when file's task is assigned to another agent
+- Utilization scorecard tracking (SCORECARD.md)
 
-- **Forgetting Audit Trail** — every deletion logged with reason (TTL, LRU, consolidation, feedback, user).
-- **Decay Curves** — old unaccessed memories rank lower in search results. Preferences and errors exempt. Floor at 0.35.
-- **Conflict Detection** — contradictions auto-detected on store. Decisions auto-resolve (newest wins), lessons get flagged for manual review.
-- 31 new tests for forgetting intelligence features.
+### Changed
+- **Tool optimization**: 44 → 22 MCP tools (23% → 91% utilization)
+  - Phase 1: Disconnected redundant coordination schemas (44 → 25)
+  - Phase 2: Merged `omega_status` into `omega_health`, `omega_export`/`omega_import` into `omega_backup`, `omega_cross_project_lessons` into `omega_lessons` (25 → 22)
+  - Phase 3: Activated 8 dormant tools via hook wiring (session_start: type_stats, list_preferences, auto-backup; session_stop: session_stats, timeline; surface: traverse, phrase_search)
+- MCP idle timeout: 600s → 3600s (1 hour)
 
-## [0.5.0] - 2026-02-13
+## [0.3.0] - 2026-02-10
 
-### Initial Open Source Release
+### Added
+- **Real multi-agent file enforcement**: PreToolUse `pre_file_guard` hook blocks Edit/Write/NotebookEdit via `sys.exit(2)` when the target file is claimed by another agent session
+- **Claim TTL auto-expiry**: `CLAIM_TTL_SECONDS = 600` — file claims expire after 10 minutes of inactivity, independently of the 30-minute stale session timeout
+- **Force-claim override**: `claim_file(force=True)` lets agents explicitly steal claims when coordination breaks down, with full audit trail via `log_audit(tool_name="file_claim_force")`
+- `force` boolean parameter added to `omega_file_claim` MCP tool schema
+- `_clean_expired_claims()` method runs during periodic stale session cleanup
+- TTL-aware `check_file()` auto-deletes expired claims on read
+- Daemon parity: `handle_pre_file_guard` handler in `hook_server.py` dispatch table
+- `pre_file_guard` added to `fast_hook.py` fallback scripts table
+- 21 new tests in `test_pre_file_guard.py` covering blocking, self-claim, TTL expiry, force-claim, fail-open, notebook support
+- Atomic write for `profile.json` via tempfile + `os.replace` to prevent corruption on crash
 
-OMEGA — persistent memory for AI coding agents. First public release under Apache-2.0.
+### Fixed
+- **Deadlock in `claim_file`**: `log_audit()` was called inside `with self._lock:` — since `threading.Lock` is non-reentrant, this caused silent hangs. Audit call moved outside the lock block
 
-#### Core Memory System
-- **25 MCP tools** for storing, querying, and managing long-term memory
-- Semantic search via bge-small-en-v1.5 embeddings + sqlite-vec
-- FTS5 full-text search for exact phrase queries
-- Graph relationships (related, supersedes, contradicts) with BFS traversal
-- Memory compaction and consolidation for long-term hygiene
-- Timeline views and session-scoped queries
-- Context virtualization (checkpoint/resume)
+### Design Decisions
+- **Fail-open**: OMEGA unavailability never blocks edits — coordination is opt-in safety
+- **Standalone hook, not daemon-routed**: PreToolUse is on the critical path; standalone is safer if daemon crashes
+- **No enforcement in single-agent mode**: Empty `SESSION_ID` skips all file guard checks
 
-#### Auto-Capture & Surfacing
-- Hook system for automatic context capture and memory surfacing
-- Session start/stop lifecycle with welcome briefing
-- Pre-edit memory surfacing with file-extension-aware re-ranking
-- Auto-capture of decisions, lessons, and error patterns
+## [0.2.8] - 2026-02-10
 
-#### Storage & Security
-- SQLite + sqlite-vec backend (local-first, no cloud required)
-- Optional AES-256-GCM encryption at rest (`pip install omega-memory[encrypt]`)
-- Database created with `0o600` permissions
+### Added
+- SECURITY.md with vulnerability reporting policy
+- CHANGELOG.md in Keep-A-Changelog format (backfilled v0.2.0–v0.2.7)
+- CLI memory commands: `omega query`, `omega store`, `omega remember`, `omega timeline`
+- LLM-agnostic setup: `omega setup --client claude-code` (decoupled from Claude Code)
+- `omega_task_cancel` MCP tool with handler and schema (was dead code — coordination method existed but had no MCP path)
+
+### Changed
+- Removed 6 zero-utilization MCP tools (`deduplicate`, `extract_preferences`, `constraints`, `batch_store`, `reload`, `dedup_stats`)
+- Removed 3 overhead hooks (`post_edit_test`, `pre_edit_surface`, `track_file_read`), reducing per-edit Python processes from 5 to 3
+- Export/import paths restricted to `~/.omega/` (was entire home directory)
+- Error messages in MCP handlers no longer leak internal details
+- `~/.omega/` directory created with mode `0o700` (owner-only access)
+- Encryption key file created atomically with `O_EXCL` to prevent TOCTOU race
+- Thread-safe SQLiteStore singleton via double-check locking
+- Hardcoded `/opt/homebrew/bin/python3` replaced with dynamic resolution in hooks
+- Silent vec-index delete failures now logged at DEBUG level
+- Dedup regex compiled once at module level instead of per-query
+- Hook log rotation at 5 MB cap to prevent disk fill
+- `pre_push_guard` now blocks pushes on divergence via `sys.exit(2)` (was advisory-only)
+- `auto_claim_file` now surfaces `[CONFLICT]` warnings instead of silently swallowing claim conflicts
+- Hook timeouts increased: `coord_session_start` 3s → 10s, `coord_session_stop` 3s → 8s
+- Git fetch subprocess timeout reduced from 15s to 5s to fit within hook timeouts
+- Replaced deprecated `datetime.utcnow()` with `datetime.now(timezone.utc)` in hooks and coordination
+- Coordination tool count: 25 handlers (was 24)
+
+### Removed
+- Dead `save()`/`load()` compatibility stubs from SQLiteStore
+- Undefined `_LOAD_ATTEMPT_COUNT` global from graphs.py
+
+### Fixed
+- Numeric MCP handler parameters now clamped to safe bounds
+- `.gitignore` hardened with `.env`, `*.db`, `*.log`, `*.key`, `hook.sock`, `.omega/`
+- `cancel_task` now enforces owner check — previously any session could cancel another's in-progress work
+- `claim_file`/`claim_branch` catch `sqlite3.IntegrityError` for cross-process race safety
+- `check_file` reads now guarded by `_lock` for consistency with write locking discipline
+- `check_inbox` read + mark-as-read unified under single lock to prevent concurrent read races
+- `_snapshot_session` preserves session capabilities in metadata for `_auto_reregister` recovery
+- Push event logging no longer truncates commit hashes (was `[:12]`, causing hash comparison mismatches)
+
+## [0.2.7] - 2026-02-10
+
+### Added
+- Memory visibility UX: capture confirmations, scored surfacing, health pulse, session activity summary
+- Auto-feedback on surfaced memories at session stop
+- Auto-compaction of lessons every 14 days at session start
+- Cross-project lesson surfacing at session start
+- File-extension-to-tag mapping for contextual re-ranking in edit surfacing
+- `fast_hook.py` stdin bridging for fallback hook scripts
+- Public SQLiteStore API: `edge_count()`, `get_last_capture_time()`, `get_session_event_counts()`
+- 61 tests for hook UX output formatting
+
+### Changed
+- Disabled CoreML provider to prevent native memory leak (~700KB/op); CPU-only ONNX used instead
+- Session summaries TTL reduced from LONG_TERM (2 weeks) to SHORT_TERM (1 day)
+- Hooks no longer access `SQLiteStore._conn` directly (use public API)
+
+### Fixed
+- Daemon/standalone hook parity for scored surfacing, capture confirmations, and auto-feedback
+- Stale surfacing file cleanup (both `.surfaced` and `.surfaced.json` files older than 24h)
+- Idle watchdog task reference saved to prevent GC cancellation
+- Resolved 23 test failures from broken hook imports
+- Error dedup in hooks: cap at 5 errors/session, deduplicate by first-100-chars hash
+
+## [0.2.4] - 2026-02-09
+
+### Added
+- UDS hook server for fast hook dispatch (~5ms vs ~750ms cold start)
+- Graph traversal (`omega_traverse`) with BFS over edges table, max 5 hops
+- Memory compaction (`omega_compact`) with Jaccard clustering and consolidated summaries
+- Contextual re-ranking with `context_file` and `context_tags` boost
+- Auto-claim file hook for implicit coordination
+- Orphan process cleanup and proactive stale session GC
+- 24 tests for UDS hook server, idle watchdog, and stale cleanup debounce
+- UAT suite for registration, coordination, and conflict avoidance
+
+### Fixed
+- Coordination lifecycle, edge creation, and TTL gaps
+- Batch embedding falls back to single-item ONNX before hash
+
+## [0.2.3] - 2026-02-09
+
+### Added
+- bge-small-en-v1.5 as primary embedding model (384-dim, better quality than all-MiniLM-L6-v2)
+- Periodic TTL garbage collection (at most once per hour via `time.monotonic()`)
+- Git-aware coordination: detect uncoordinated agents via git state
+- Observability: `omega doctor`, FTS5 repair, backup, timing, plan capture
+
+### Changed
+- Python minimum version raised to 3.11+ (3.10 EOL)
+- Test isolation improvements for safety
+
+### Fixed
+- bge-small-en-v1.5 HuggingFace download URLs corrected
+
+## [0.2.2] - 2026-02-09
+
+### Added
+- Intelligence layer: constraints, cross-project lessons, smart surfacing
+- Task management with deadlock detection and audit log
+- Defensive hooks: read tracking and read-before-write warning
+- Session recovery: snapshot/recover crashed sessions
+
+### Fixed
+- Flaky tests caused by embedding circuit-breaker leak
+- Naive/aware datetime comparison bug in `query()`
+- 4 documented feature gaps closed
+
+## [0.2.1] - 2026-02-09
+
+### Added
+- `omega_similar`: find memories similar to a given one
+- `omega_timeline`: show memories grouped by day
+- `omega_consolidate`: memory hygiene at scale (dedup, prune, optimize)
+- Auto-tags: extract languages, tools, file paths, project names at store time
+- Auto-relate: create `related` edges on store (similarity >= 0.45)
+
+### Fixed
+- 3 critical bugs found during UAT testing
+
+## [0.2.0] - 2026-02-09
+
+### Added
+- SQLite + sqlite-vec backend replacing in-memory graphs + JSONL sidecar
+- FTS5 full-text search for phrase queries
+- Multi-agent coordination system (12 tools, 38 tests)
+- Encryption at rest with `cryptography` library
+- `omega_remember`, `omega_store`, `omega_query`, `omega_welcome`, `omega_profile`
 - Export/import for backup and restore
+- Batch store for multiple memories in one call
+- 37 handler tests covering all 21 handlers
 
-#### Developer Experience
-- `omega setup` — one-command installation
-- `omega doctor` — health diagnostics
-- `omega query/store/remember` — CLI access to memory
-- Plugin architecture via entry points for extensibility
+### Changed
+- Complete storage rewrite from JSONL to SQLite
+- Parameterized SQL throughout (no string interpolation)
 
-[Unreleased]: https://github.com/omega-memory/omega-memory/compare/v0.11.1...HEAD
-[0.11.1]: https://github.com/omega-memory/omega-memory/compare/v0.11.0...v0.11.1
-[0.11.0]: https://github.com/omega-memory/omega-memory/compare/v0.10.8...v0.11.0
-[0.10.8]: https://github.com/omega-memory/omega-memory/compare/v0.10.7...v0.10.8
-[0.10.0]: https://github.com/omega-memory/omega-memory/compare/v0.9.0...v0.10.0
-[0.9.0]: https://github.com/omega-memory/omega-memory/compare/v0.8.0...v0.9.0
-[0.8.0]: https://github.com/omega-memory/omega-memory/compare/v0.7.3...v0.8.0
-[0.7.3]: https://github.com/omega-memory/omega-memory/compare/v0.7.2...v0.7.3
-[0.7.2]: https://github.com/omega-memory/omega-memory/compare/v0.7.1...v0.7.2
-[0.7.1]: https://github.com/omega-memory/omega-memory/compare/v0.7.0...v0.7.1
-[0.7.0]: https://github.com/omega-memory/omega-memory/compare/v0.6.1...v0.7.0
-[0.6.1]: https://github.com/omega-memory/omega-memory/compare/v0.6.0...v0.6.1
-[0.6.0]: https://github.com/omega-memory/omega-memory/compare/v0.5.0...v0.6.0
-[0.5.0]: https://github.com/omega-memory/omega-memory/releases/tag/v0.5.0
+[1.0.0]: https://github.com/omega-memory/omega/compare/v0.6.1...v1.0.0
+[0.6.1]: https://github.com/omega-memory/omega/compare/v0.5.0...v0.6.1
+[0.5.0]: https://github.com/omega-memory/omega/compare/v0.4.3...v0.5.0
+[0.4.3]: https://github.com/omega-memory/omega/compare/v0.4.1...v0.4.3
+[0.4.2]: https://github.com/omega-memory/omega/compare/v0.4.1...v0.4.3
+[0.4.1]: https://github.com/omega-memory/omega/compare/v0.3.0...v0.4.1
+[0.4.0]: https://github.com/omega-memory/omega/compare/v0.3.0...v0.4.1
+[0.3.2]: https://github.com/omega-memory/omega/compare/v0.3.0...v0.4.1
+[0.3.1]: https://github.com/omega-memory/omega/compare/v0.3.0...v0.4.1
+[0.3.0]: https://github.com/omega-memory/omega/compare/v0.2.8...v0.3.0
+[0.2.8]: https://github.com/omega-memory/omega/compare/v0.2.7...v0.2.8
+[0.2.7]: https://github.com/omega-memory/omega/compare/v0.2.2...v0.2.7
+[0.2.4]: https://github.com/omega-memory/omega/compare/v0.2.2...v0.2.7
+[0.2.3]: https://github.com/omega-memory/omega/compare/v0.2.2...v0.2.7
+[0.2.2]: https://github.com/omega-memory/omega/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/omega-memory/omega/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/omega-memory/omega/releases/tag/v0.2.0
