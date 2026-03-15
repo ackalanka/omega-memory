@@ -207,15 +207,13 @@ omega setup --hooks-only    # auto-capture + memory surfacing, no MCP server (~6
 
 </details>
 
-
-## Windows Installation
+<details>
+<summary><strong>Windows Installation</strong></summary>
 
 OMEGA can run on Windows in two ways:
 
 1. **Native Windows Python (recommended for most users)**
 2. **WSL 2 (recommended for Linux-like development environments)**
-
----
 
 ### Option 1: Native Windows Installation
 
@@ -236,8 +234,6 @@ python --version
 pip --version
 ```
 
----
-
 **2. Install OMEGA**
 
 Open **PowerShell** or **Windows Terminal**:
@@ -245,8 +241,6 @@ Open **PowerShell** or **Windows Terminal**:
 ```powershell
 pip install omega-memory[server]
 ```
-
----
 
 **3. Run setup**
 
@@ -261,8 +255,6 @@ This will:
 - Create the `.omega` directory
 - Configure your MCP client if detected
 
----
-
 ### Option 2: Install via pipx (Recommended for global install)
 
 ```powershell
@@ -273,112 +265,45 @@ omega setup
 
 Using `pipx` keeps OMEGA isolated from other Python packages.
 
----
+### Option 3: WSL 2
 
-## Windows-Specific Notes
-
-### PATH issues
-
-If `omega` is not recognized:
-
-```powershell
-python -m omega setup
+```bash
+# In PowerShell (admin)
+wsl --install
 ```
 
-or restart the terminal so the PATH updates.
+This installs Ubuntu by default. Restart when prompted. Then inside WSL:
 
----
-
-### Python launcher differences
-
-Some systems require:
-
-```powershell
-py -m pip install omega-memory[server]
-```
-
-instead of `pip`.
-
----
-
-### File paths
-
-Windows paths use backslashes:
-
-```
-C:\Users\<username>\.omega\
-```
-
-OMEGA automatically handles path normalization internally.
-
----
-
-### Model download location
-
-The embedding model will be downloaded to:
-
-```
-C:\Users\<username>\AppData\Local\omega\models\
-```
-
----
-
-### Antivirus interference
-
-Some Windows antivirus software may block:
-
-- ONNX model loading
-- SQLite file creation
-
-If you encounter issues:
-
-- whitelist the `.omega` directory
-- whitelist the Python installation
-
----
-
-### Editor integration
-
-If automatic editor setup fails, you can manually configure MCP:
-
-```json
-{
-  "mcpServers": {
-    "omega-memory": {
-      "command": "python",
-      "args": ["-m", "omega.server.mcp_server"]
-    }
-  }
-}
-```
-
----
-
-## Testing Installation on Windows
-
-After installation run:
-
-```powershell
+```bash
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv
+pip3 install omega-memory[server]
+omega setup
 omega doctor
 ```
 
-Expected output:
+**WSL-specific notes:**
 
-```
-✔ Python version supported
-✔ Model downloaded
-✔ Database initialized
-✔ MCP server ready
-```
+- **Use the Linux filesystem, not `/mnt/c/`.** Keep projects on the Linux side (`~/Projects/`) for best performance.
+- **Keyring may not work out of the box.** If you use `omega-memory[encrypt]`, install `keyrings.alt`: `pip3 install keyrings.alt`.
+- **Claude Code runs inside WSL.** Install Claude Code in your WSL terminal, not in Windows PowerShell.
+- **Multiple WSL distros.** Each distro has its own `~/.omega/` directory. Copy `~/.omega/omega.db` to transfer memories.
 
-You can also test the CLI:
+### Windows-Specific Notes
+
+- **PATH issues:** If `omega` is not recognized, run `python -m omega setup` or restart the terminal.
+- **Python launcher:** Some systems require `py -m pip install omega-memory[server]` instead of `pip`.
+- **File paths:** OMEGA stores data in `C:\Users\<username>\.omega\` and the model in `C:\Users\<username>\AppData\Local\omega\models\`. Path normalization is handled automatically.
+- **Antivirus:** If you encounter issues with ONNX model loading or SQLite, whitelist the `.omega` directory and your Python installation.
+- **Editor integration:** If auto-setup fails, manually add `{"mcpServers": {"omega-memory": {"command": "python", "args": ["-m", "omega.server.mcp_server"]}}}` to your editor's MCP config.
+
+**Test your installation:**
 
 ```powershell
+omega doctor    # should show all checks passing
 omega query "test"
 ```
 
-If it returns results without errors, the installation is working correctly.
-
+</details>
 
 ## What It Does
 
@@ -555,52 +480,6 @@ omega doctor
 ```
 
 Every SSH session has full memory of every previous session on that server. Survives disconnects. ~337 MB RAM after first query. Zero external services.
-
-<details>
-<summary><strong>Windows (WSL) Setup</strong></summary>
-
-OMEGA runs on Windows through [WSL 2](https://learn.microsoft.com/en-us/windows/wsl/install) (Windows Subsystem for Linux). WSL 1 works but WSL 2 is recommended for better SQLite performance.
-
-**1. Install WSL 2 (if you don't have it)**
-
-```powershell
-# In PowerShell (admin)
-wsl --install
-```
-
-This installs Ubuntu by default. Restart when prompted.
-
-**2. Install Python 3.11+ inside WSL**
-
-```bash
-# In your WSL terminal
-sudo apt update && sudo apt install -y python3 python3-pip python3-venv
-python3 --version   # should be 3.11+
-```
-
-If your distro ships an older Python, use the deadsnakes PPA:
-
-```bash
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update && sudo apt install -y python3.12 python3.12-venv
-```
-
-**3. Install and set up OMEGA**
-
-```bash
-pip3 install omega-memory[server]
-omega setup
-omega doctor
-```
-
-**WSL-specific notes:**
-
-- **Use the Linux filesystem, not `/mnt/c/`.** OMEGA stores data in `~/.omega/` inside WSL. Keep your projects on the Linux side (`~/Projects/`) for best performance.
-- **Keyring may not work out of the box.** If you use `omega-memory[encrypt]`, install `keyrings.alt` for a file-based backend: `pip3 install keyrings.alt`.
-- **Claude Code runs inside WSL.** Install Claude Code in your WSL terminal, not in Windows PowerShell.
-- **Multiple WSL distros.** Each distro has its own `~/.omega/` directory. Copy `~/.omega/omega.db` to transfer memories.
-
-</details>
 
 For detailed architecture documentation, including the search pipeline, memory lifecycle, hook system, and storage layer, see **[docs/architecture.md](docs/architecture.md)**.
 
