@@ -1,6 +1,6 @@
 # OMEGA
 
-**Постоянная память для ИИ-агентов программирования.** Ваш агент запоминает решения, учится на ошибках и продолжает с того места, где остановился.
+**ИИ-агенты, которые запоминают, координируют и обучаются. Всё на вашей машине.** Мозг вашего агента не должен находиться на чужом сервере.
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)

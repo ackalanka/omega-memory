@@ -1,6 +1,6 @@
 # OMEGA
 
-**Persistenter Speicher für KI-Codierungsagenten.** Dein Agent merkt sich Entscheidungen, lernt aus Fehlern und macht dort weiter, wo er aufgehört hat.
+**KI-Agenten, die sich erinnern, koordinieren und lernen. Alles auf deinem Rechner.** Das Gehirn deines Agenten sollte nicht auf dem Server eines anderen liegen.
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)

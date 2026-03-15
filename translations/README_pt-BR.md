@@ -1,6 +1,6 @@
 # OMEGA
 
-**Memória persistente para agentes de codificação com IA.** Seu agente lembra decisões, aprende com erros e retoma de onde parou.
+**Agentes de IA que lembram, coordenam e aprendem. Tudo na sua máquina.** O cérebro do seu agente não deveria ficar no servidor de outra pessoa.
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)

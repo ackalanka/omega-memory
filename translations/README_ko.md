@@ -1,6 +1,6 @@
 # OMEGA
 
-**AI 코딩 에이전트를 위한 영구 메모리.** 에이전트가 결정을 기억하고, 실수에서 배우며, 중단된 곳에서 다시 시작합니다.
+**AI 에이전트의 기억, 협업, 학습을 당신의 머신에서.** 에이전트의 두뇌가 다른 사람의 서버에 있을 필요는 없습니다.
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)

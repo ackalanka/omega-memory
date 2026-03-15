@@ -1,6 +1,6 @@
 # OMEGA
 
-**AIコーディングエージェントのための永続メモリ。** エージェントが意思決定を記憶し、失敗から学び、中断したところから再開します。
+**AIエージェントの記憶・連携・学習を、すべてあなたのマシンで。** エージェントの頭脳を他人のサーバーに預ける必要はありません。
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)

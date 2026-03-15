@@ -1,6 +1,6 @@
 # OMEGA
 
-**AI 编程代理的持久记忆系统。** 你的代理能记住决策、从错误中学习，并从中断处继续工作。
+**AI 代理的记忆、协调与学习，全部在你的机器上运行。** 你的代理的大脑不应该存储在别人的服务器上。
 
 [![PyPI version](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
