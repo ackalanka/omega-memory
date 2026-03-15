@@ -155,3 +155,56 @@ def print_summary(errors: int, warnings: int) -> None:
             print(f"All checks passed with {warnings} warning(s)")
         else:
             print(f"{errors} error(s), {warnings} warning(s)")
+
+
+def print_stats_card(
+    memories: int,
+    queries: int,
+    sessions: int,
+    connections: int,
+    active_since: str,
+) -> None:
+    """Print a beautiful, screenshot-worthy stats card.
+    
+    Args:
+        memories: Total number of memories stored
+        queries: Total queries served
+        sessions: Number of sessions powered
+        connections: Number of graph edges/connections
+        active_since: Date string (e.g., "Feb 09, 2026")
+    """
+    if RICH_AVAILABLE:
+        from rich.align import Align
+        from rich.panel import Panel
+        from rich.text import Text
+
+        content = Text()
+        content.append("OMEGA — Your Agent's Memory\n\n", style="bold cyan")
+        content.append(f"Memories stored:        {memories:,}\n", style="green")
+        content.append(f"Queries served:     {queries:,}\n", style="yellow")
+        content.append(f"Sessions powered:       {sessions:,}\n", style="magenta")
+        content.append(f"Connections:            {connections:,}\n", style="blue")
+        content.append(f"Active since:  {active_since}\n\n", style="dim")
+        content.append("github.com/omega-memory/omega-memory", style="dim italic")
+
+        panel = Panel(
+            Align.center(content),
+            title="[bold]OMEGA Stats Card[/bold]",
+            border_style="cyan",
+            expand=False,
+        )
+        console.print(panel)
+    else:
+        # Plain text fallback
+        width = 46
+        print("+" + "-" * width + "+")
+        print("|" + "    OMEGA — Your Agent's Memory".ljust(width) + "|")
+        print("|" + " " * width + "|")
+        print("|" + f"  Memories stored:        {memories:,}".ljust(width) + "|")
+        print("|" + f"  Queries served:     {queries:,}".ljust(width) + "|")
+        print("|" + f"  Sessions powered:       {sessions:,}".ljust(width) + "|")
+        print("|" + f"  Connections:            {connections:,}".ljust(width) + "|")
+        print("|" + f"  Active since:  {active_since}".ljust(width) + "|")
+        print("|" + " " * width + "|")
+        print("|" + "  github.com/omega-memory/omega-memory".ljust(width) + "|")
+        print("+" + "-" * width + "+")

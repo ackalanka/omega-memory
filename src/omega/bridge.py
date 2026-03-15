@@ -3449,4 +3449,23 @@ __all__ = [
     "list_reminders",
     "dismiss_reminder",
     "get_due_reminders",
+    "get_first_memory_date",
 ]
+
+
+def get_first_memory_date() -> Optional[datetime]:
+    """Get the creation date of the first memory in the store."""
+    store = _get_store()
+    try:
+        # Query for the oldest memory by created_at
+        cursor = store.conn.execute(
+            "SELECT created_at FROM memories ORDER BY created_at ASC LIMIT 1"
+        )
+        row = cursor.fetchone()
+        if row and row[0]:
+            # Parse ISO timestamp
+            return datetime.fromisoformat(row[0].replace("Z", "+00:00"))
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to get first memory date: {e}")
+        return None

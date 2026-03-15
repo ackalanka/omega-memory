@@ -1406,6 +1406,7 @@ def cmd_compact(args):
 def cmd_stats(args):
     """Show memory type distribution and health summary."""
     use_json = getattr(args, "json", False)
+    use_card = getattr(args, "card", False)
 
     from omega.bridge import type_stats, status as omega_status
 
@@ -1416,9 +1417,36 @@ def cmd_stats(args):
         print(json.dumps({"types": stats, "health": health}, indent=2, default=str))
         return
 
+    total = sum(stats.values())
+
+    # If --card flag is set, show the stats card instead
+    if use_card:
+        from omega.cli_ui import print_stats_card
+        from omega.bridge import get_first_memory_date
+        
+        # Get query count from health data or estimate
+        queries = health.get("total_queries", 0)
+        sessions = health.get("session_count", 0)
+        connections = health.get("edge_count", 0)
+        
+        # Get active since date
+        first_date = get_first_memory_date()
+        if first_date:
+            active_since = first_date.strftime("%b %d, %Y")
+        else:
+            active_since = "Unknown"
+        
+        print_stats_card(
+            memories=total,
+            queries=queries,
+            sessions=sessions,
+            connections=connections,
+            active_since=active_since,
+        )
+        return
+
     from omega.cli_ui import print_bar_chart, print_header, print_kv
 
-    total = sum(stats.values())
     print_header("OMEGA Stats")
     print_kv(
         [
@@ -2501,6 +2529,7 @@ def main():
     )
     stats_parser = subparsers.add_parser("stats", help="Show memory type distribution and health summary")
     stats_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
+    stats_parser.add_argument("--card", action="store_true", help="Show a beautiful, screenshot-worthy stats card")
     activity_parser = subparsers.add_parser("activity", help="Show recent session activity overview")
     activity_parser.add_argument("--days", type=int, default=7, help="Number of days to show (default: 7)")
     activity_parser.add_argument("--json", action="store_true", help="Output as JSON (also: OMEGA_JSON=1)")
