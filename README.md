@@ -133,6 +133,179 @@ omega setup --hooks-only    # auto-capture + memory surfacing, no MCP server (~6
 
 </details>
 
+
+## Windows Installation
+
+OMEGA can run on Windows in two ways:
+
+1. **Native Windows Python (recommended for most users)**
+2. **WSL 2 (recommended for Linux-like development environments)**
+
+---
+
+### Option 1: Native Windows Installation
+
+**1. Install Python 3.11+**
+
+Download Python from:
+
+https://www.python.org/downloads/windows/
+
+During installation make sure to enable:
+
+✔ Add Python to PATH
+
+Verify installation:
+
+```powershell
+python --version
+pip --version
+```
+
+---
+
+**2. Install OMEGA**
+
+Open **PowerShell** or **Windows Terminal**:
+
+```powershell
+pip install omega-memory[server]
+```
+
+---
+
+**3. Run setup**
+
+```powershell
+omega setup
+omega doctor
+```
+
+This will:
+
+- Download the embedding model
+- Create the `.omega` directory
+- Configure your MCP client if detected
+
+---
+
+### Option 2: Install via pipx (Recommended for global install)
+
+```powershell
+pip install pipx
+pipx install omega-memory[server]
+omega setup
+```
+
+Using `pipx` keeps OMEGA isolated from other Python packages.
+
+---
+
+## Windows-Specific Notes
+
+### PATH issues
+
+If `omega` is not recognized:
+
+```powershell
+python -m omega setup
+```
+
+or restart the terminal so the PATH updates.
+
+---
+
+### Python launcher differences
+
+Some systems require:
+
+```powershell
+py -m pip install omega-memory[server]
+```
+
+instead of `pip`.
+
+---
+
+### File paths
+
+Windows paths use backslashes:
+
+```
+C:\Users\<username>\.omega\
+```
+
+OMEGA automatically handles path normalization internally.
+
+---
+
+### Model download location
+
+The embedding model will be downloaded to:
+
+```
+C:\Users\<username>\AppData\Local\omega\models\
+```
+
+---
+
+### Antivirus interference
+
+Some Windows antivirus software may block:
+
+- ONNX model loading
+- SQLite file creation
+
+If you encounter issues:
+
+- whitelist the `.omega` directory
+- whitelist the Python installation
+
+---
+
+### Editor integration
+
+If automatic editor setup fails, you can manually configure MCP:
+
+```json
+{
+  "mcpServers": {
+    "omega-memory": {
+      "command": "python",
+      "args": ["-m", "omega.server.mcp_server"]
+    }
+  }
+}
+```
+
+---
+
+## Testing Installation on Windows
+
+After installation run:
+
+```powershell
+omega doctor
+```
+
+Expected output:
+
+```
+✔ Python version supported
+✔ Model downloaded
+✔ Database initialized
+✔ MCP server ready
+```
+
+You can also test the CLI:
+
+```powershell
+omega query "test"
+```
+
+If it returns results without errors, the installation is working correctly.
+
+
 ## What It Does
 
 After `omega setup`, OMEGA works in the background. No commands to learn.
@@ -276,7 +449,8 @@ Auto-capture hooks are currently only supported by Claude Code's hook system. Al
 |--------|--------|-|-------------|--------|
 | 3.11 | Supported | | macOS (Apple Silicon + Intel) | Fully supported |
 | 3.12 | Supported | | Linux (x86_64, aarch64) | Fully supported |
-| 3.13 | Supported | | Windows (WSL 2) | Supported |
+| 3.13 | Supported | | Windows (Native) | Supported |
+| | | | Windows (WSL 2) | Fully supported |
 
 ### System Requirements
 
