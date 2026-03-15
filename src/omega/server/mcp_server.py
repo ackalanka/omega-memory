@@ -25,8 +25,9 @@ except ImportError:
     )
     sys.exit(1)
 
-from omega.server.tool_schemas import TOOL_SCHEMAS as _CORE_SCHEMAS
+from omega.server.tool_schemas import TOOL_SCHEMAS as _CORE_SCHEMAS, get_condensed_schemas
 from omega.server.handlers import HANDLERS as _CORE_HANDLERS
+from omega.server import handlers as _handlers_module
 
 # Start with core memory tools
 TOOL_SCHEMAS = list(_CORE_SCHEMAS)
@@ -62,6 +63,18 @@ for _plugin in _discovered_plugins:
         TOOL_SCHEMAS = TOOL_SCHEMAS + _plugin.TOOL_SCHEMAS
     if _plugin.HANDLERS:
         HANDLERS = {**HANDLERS, **_plugin.HANDLERS}
+
+# ---------------------------------------------------------------------------
+# Condensed Mode (CodeMode-inspired) — expose 2 meta-tools + 3 standalone
+# instead of 20+ individual tools to save ~88% context tokens.
+# Toggle via OMEGA_CONDENSED=1 env var or omega serve --condensed.
+# ---------------------------------------------------------------------------
+_CONDENSED_MODE = os.environ.get("OMEGA_CONDENSED", "0") == "1"
+
+# Give handlers access to the full merged schema list and handler registry
+# so omega_tools and omega_call can discover and dispatch all tools.
+_handlers_module._ALL_SCHEMAS = TOOL_SCHEMAS
+_handlers_module._ALL_HANDLERS.update(HANDLERS)
 
 # Wire plugin retrieval profiles and score modifiers to SQLiteStore (lazy)
 def _wire_plugin_retrieval():
@@ -133,8 +146,29 @@ During conversations:
 These tools are your memory. Use them proactively without being asked.\
 """
 
+_MCP_INSTRUCTIONS_CONDENSED = """\
+OMEGA gives you persistent memory across conversations. \
+You MUST use it automatically in every conversation.
 
-server = Server("omega-memory", instructions=_MCP_INSTRUCTIONS)
+REQUIRED at the start of EVERY conversation:
+1. Call omega_welcome() immediately for context briefing
+2. Call omega_protocol() for your operating instructions
+3. Follow the protocol it returns
+
+During conversations:
+- Use omega_store() directly to save memories (decisions, lessons, preferences)
+- Use omega_tools() to discover available tools and their parameters
+- Use omega_call(tool='name', args={...}) to execute any other OMEGA tool
+- When context is getting full: omega_call(tool='omega_checkpoint', args={...})
+
+These tools are your memory. Use them proactively without being asked.\
+"""
+
+
+server = Server(
+    "omega-memory",
+    instructions=_MCP_INSTRUCTIONS_CONDENSED if _CONDENSED_MODE else _MCP_INSTRUCTIONS,
+)
 
 # ---------------------------------------------------------------------------
 # Rate limiting — sliding-window counters (no new deps)
@@ -148,7 +182,7 @@ _write_timestamps: collections.deque = collections.deque()
 
 _WRITE_TOOLS = frozenset({
     "omega_store", "omega_checkpoint", "omega_remind",
-    "omega_memory", "omega_maintain", "omega_reflect",
+    "omega_memory", "omega_maintain", "omega_reflect", "omega_call",
     "omega_profile_set", "omega_entity_create", "omega_entity_update",
     "omega_ingest_document", "omega_task_create",
     "omega_file_claim", "omega_branch_claim",
@@ -185,14 +219,15 @@ def _check_rate_limit(tool_name: str) -> str | None:
 
 @server.list_tools()
 async def list_tools() -> list[Tool]:
-    """Return all OMEGA tools."""
+    """Return all OMEGA tools (or condensed set if OMEGA_CONDENSED=1)."""
+    schemas = get_condensed_schemas(TOOL_SCHEMAS) if _CONDENSED_MODE else TOOL_SCHEMAS
     return [
         Tool(
             name=schema["name"],
             description=schema["description"],
             inputSchema=schema["inputSchema"],
         )
-        for schema in TOOL_SCHEMAS
+        for schema in schemas
     ]
 
 
@@ -206,8 +241,11 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
     if _shutting_down:
         return [TextContent(type="text", text="Server is shutting down, please retry.")]
 
-    # Rate limiting
-    rate_err = _check_rate_limit(name)
+    # Rate limiting — for omega_call, rate-limit against the inner tool name
+    rate_name = name
+    if name == "omega_call" and arguments.get("tool"):
+        rate_name = arguments["tool"]
+    rate_err = _check_rate_limit(rate_name)
     if rate_err:
         return [TextContent(type="text", text=rate_err)]
 

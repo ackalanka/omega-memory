@@ -1364,6 +1364,62 @@ async def handle_omega_consult_claude(args: dict) -> dict:
 
 
 # ============================================================================
+# Condensed Mode Meta-Tool Handlers
+# ============================================================================
+
+# Populated by mcp_server.py after all schemas (core + pro + plugins) are merged.
+_ALL_SCHEMAS: list = []
+# Reference to the full HANDLERS dict, set after dict creation below.
+_ALL_HANDLERS: dict = {}
+
+
+async def handle_omega_tools(args: Dict[str, Any]) -> dict:
+    """List available tools or get the full schema for a specific tool."""
+    import json
+    from omega.server.tool_schemas import TOOL_CATEGORIES
+
+    tool_name = args.get("tool")
+    category = args.get("category", "all")
+
+    if tool_name:
+        # Return full schema for a specific tool
+        for schema in _ALL_SCHEMAS:
+            if schema["name"] == tool_name:
+                return mcp_response(json.dumps(schema["inputSchema"], indent=2))
+        return mcp_error(f"Unknown tool: {tool_name}")
+
+    # List all tools, optionally filtered by category
+    lines = []
+    for schema in _ALL_SCHEMAS:
+        cat = TOOL_CATEGORIES.get(schema["name"], "other")
+        if category != "all" and cat != category:
+            continue
+        lines.append(f"- **{schema['name']}** [{cat}]: {schema['description']}")
+
+    if not lines:
+        return mcp_response(f"No tools found in category '{category}'.")
+
+    header = f"Available OMEGA tools ({len(lines)}):\n\n"
+    footer = "\n\nUse omega_tools(tool='name') to get the full input schema for any tool."
+    return mcp_response(header + "\n".join(lines) + footer)
+
+
+async def handle_omega_call(args: Dict[str, Any]) -> dict:
+    """Execute any OMEGA tool by name with arguments."""
+    tool_name = args.get("tool")
+    tool_args = args.get("args") or {}
+
+    if not tool_name:
+        return mcp_error("Required parameter 'tool' is missing.")
+
+    handler = _ALL_HANDLERS.get(tool_name)
+    if not handler:
+        return mcp_error(f"Unknown tool: {tool_name}. Use omega_tools() to list available tools.")
+
+    return await handler(tool_args)
+
+
+# ============================================================================
 # Handler Registry
 # ============================================================================
 
@@ -1410,4 +1466,10 @@ HANDLERS: Dict[str, Any] = {
     "omega_weekly_digest": handle_omega_weekly_digest,
     "omega_remind_list": handle_omega_remind_list,
     "omega_remind_dismiss": handle_omega_remind_dismiss,
+    # === Condensed mode meta-tools ===
+    "omega_tools": handle_omega_tools,
+    "omega_call": handle_omega_call,
 }
+
+# Wire _ALL_HANDLERS so omega_call can dispatch to any handler.
+_ALL_HANDLERS.update(HANDLERS)
