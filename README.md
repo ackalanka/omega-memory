@@ -63,6 +63,51 @@ omega setup --client antigravity     # writes ~/.gemini/antigravity/mcp_config.j
 ```
 
 <details>
+<summary><strong>Zed Editor Setup</strong></summary>
+
+Zed uses a different config format (`context_servers` instead of `mcpServers`).
+
+**Config file:** `~/.config/zed/settings.json`
+
+**Open Zed settings:**
+- Via menu: `Zed > Settings > Open Settings`
+- Or edit directly: `~/.config/zed/settings.json`
+
+**Add this to your Zed settings:**
+
+```json
+{
+  "context_servers": {
+    "omega-memory": {
+      "command": {
+        "path": "uvx",
+        "args": ["omega-memory"]
+      }
+    }
+  }
+}
+```
+
+**Note:** Zed uses `context_servers` (not `mcpServers`) and wraps the command differently than other editors. The `uvx` command runs OMEGA without needing a full Python path.
+
+**Alternative (if uvx doesn't work):**
+
+```json
+{
+  "context_servers": {
+    "omega-memory": {
+      "command": {
+        "path": "python3",
+        "args": ["-m", "omega.server.mcp_server"]
+      }
+    }
+  }
+}
+```
+
+</details>
+
+<details>
 <summary><strong>Manual MCP config (Cline, VS Code, Augment, Codex CLI, any MCP client)</strong></summary>
 
 Add to your editor's MCP config file:
