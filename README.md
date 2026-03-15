@@ -361,6 +361,35 @@ Claude picks up exactly where you left off.
 
 More examples (CLI, Python API, scripting): **[docs/examples](docs/examples/README.md)**
 
+## Framework Integrations
+
+### CrewAI
+
+Use OMEGA as a persistent memory backend for [CrewAI](https://github.com/crewAIInc/crewAI) agents:
+
+```python
+from crewai.memory import Memory
+from omega.integrations.crewai import OmegaStorageBackend
+
+memory = Memory(storage=OmegaStorageBackend())
+```
+
+Your CrewAI agents get semantic search, auto-deduplication, and cross-session memory -- all local, no API keys. See [docs/examples/crewai_integration.py](docs/examples/crewai_integration.py).
+
+### LangChain / LangGraph
+
+Inject OMEGA memories as context into any [LangChain](https://github.com/langchain-ai/langchain) chain:
+
+```python
+from omega.integrations.langchain import OmegaMemory
+
+mem = OmegaMemory()
+context = mem.recall_as_context("database choice")
+# Returns relevant memories as a formatted string for your prompt
+```
+
+See [docs/examples/langchain_integration.py](docs/examples/langchain_integration.py).
+
 ## How It Compares
 
 | Feature | OMEGA | CLAUDE.md | Mem0 | Basic MCP Memory |
