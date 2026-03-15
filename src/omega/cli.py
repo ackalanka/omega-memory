@@ -926,13 +926,13 @@ def _setup_venv(errors_ref: list):
     python_path = _resolve_python_path()
     omega_bin = shutil.which("omega") or str(Path(python_path).parent / "omega")
 
-    print(f"\n  OMEGA venv configuration:")
+    print("\n  OMEGA venv configuration:")
     print(f"  Python:  {python_path}")
     print(f"  CLI:     {omega_bin}")
-    print(f"\n  MCP server (stdio):")
+    print("\n  MCP server (stdio):")
     print(f"    command: {python_path}")
-    print(f'    args:    ["-m", "omega.server.mcp_server"]')
-    print(f"\n  JSON config block (copy into your client):")
+    print('    args:    ["-m", "omega.server.mcp_server"]')
+    print("\n  JSON config block (copy into your client):")
     config = json.dumps({
         "omega-memory": {
             "command": python_path,
@@ -1850,6 +1850,9 @@ def cmd_serve(args):
     """Run the OMEGA MCP server (stdio or HTTP mode). Requires: pip install omega-memory[server]"""
     import asyncio
 
+    if getattr(args, "no_condensed", False):
+        os.environ["OMEGA_CONDENSED"] = "0"
+
     if getattr(args, "http", False):
         from omega.server.http_server import run_http, get_or_create_api_key
 
@@ -2641,6 +2644,7 @@ def main():
     serve_parser.add_argument("--port", type=int, default=8787, help="HTTP port (default: 8787)")
     serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
     serve_parser.add_argument("--no-auth", action="store_true", help="Disable API key authentication")
+    serve_parser.add_argument("--no-condensed", action="store_true", help="Disable condensed mode (expose all tools individually instead of meta-tools)")
 
     # --- Hooks commands ---
     hooks_parser = subparsers.add_parser("hooks", help="Manage Claude Code hooks")
