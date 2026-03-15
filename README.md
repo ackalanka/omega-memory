@@ -1,6 +1,6 @@
 # OMEGA
 
-**Persistent memory for AI coding agents.** Your agent remembers decisions, learns from mistakes, and picks up where it left off.
+**AI agents that remember, coordinate, and learn. All on your machine.** Your agent's brain shouldn't live on someone else's server.
 
 [🇨🇳 中文](translations/README_zh-CN.md) | [🇯🇵 日本語](translations/README_ja.md) | [🇰🇷 한국어](translations/README_ko.md) | [🇧🇷 Português](translations/README_pt-BR.md) | [🇪🇸 Español](translations/README_es.md) | [🇫🇷 Français](translations/README_fr.md) | [🇩🇪 Deutsch](translations/README_de.md) | [🇷🇺 Русский](translations/README_ru.md)
 
@@ -281,7 +281,7 @@ Auto-capture hooks are currently only supported by Claude Code's hook system. Al
 
 ## Who Uses OMEGA
 
-OMEGA is used by developers running Claude Code, Cursor, and Windsurf who need persistent memory across sessions. From solo developers to teams running multi-agent workflows.
+OMEGA is used by developers running Claude Code, Cursor, and Windsurf who need local-first memory and learning across sessions. From solo developers to teams running multi-agent workflows.
 
 > *"I installed OMEGA and forgot about it. Two weeks later I realized my Claude sessions just... knew things from previous sessions."*
 
