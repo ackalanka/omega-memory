@@ -10,15 +10,10 @@ Covers all 6 improvements:
 """
 
 import hashlib
-import json
-import os
 import time
-
-import pytest
 
 from omega.sqlite_store import (
     SCHEMA_VERSION,
-    SQLiteStore,
     SurfacingContext,
     QueryIntent,
     MemoryResult,
@@ -28,8 +23,6 @@ from omega.sqlite_store import (
     _SURFACING_THRESHOLDS,
     _INTENT_WEIGHTS,
     _HOT_CACHE_SIZE,
-    _HOT_CACHE_REFRESH_S,
-    _FAST_PATH_MIN_OVERLAP,
 )
 
 

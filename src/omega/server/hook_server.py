@@ -221,6 +221,68 @@ def handle_session_start(payload: dict) -> dict:
     return {"output": "\n".join(output), "exit_code": 0}
 
 
+def _session_resume(session_id: str, project: str, mgr) -> list[str]:
+    """Surface checkpointed tasks for session resume.
+    
+    Args:
+        session_id: Current session ID
+        project: Project path
+        mgr: Coordination manager (for Pro features, may be None)
+    
+    Returns:
+        List of formatted lines to display, including [CHECKPOINT] blocks.
+    """
+    lines = []
+    
+    try:
+        from omega.bridge import query_structured
+        
+        # Query for recent checkpoints in this project
+        checkpoints = query_structured(
+            query_text="checkpoint",
+            limit=5,
+            event_type="checkpoint",
+            project=project,
+        )
+        
+        if checkpoints:
+            lines.append("[CHECKPOINT] Resumable tasks:")
+            for cp in checkpoints:
+                content = cp.get("content", "")
+                metadata = cp.get("metadata", {})
+                task_title = metadata.get("task_title", "")
+                
+                if task_title:
+                    lines.append(f"  {task_title}")
+                else:
+                    # Fallback to content preview
+                    preview = content[:80] + "..." if len(content) > 80 else content
+                    lines.append(f"  {preview}")
+                
+                # Add progress if available
+                progress = metadata.get("progress", "")
+                if progress:
+                    lines.append(f"    Progress: {progress}")
+                
+                # Add next steps if available
+                next_steps = metadata.get("next_steps", "")
+                if next_steps:
+                    lines.append(f"    Next: {next_steps}")
+    except Exception as e:
+        logger.debug("Session resume checkpoint query failed: %s", e)
+    
+    # Pro feature: recover session from coordination manager
+    if mgr:
+        try:
+            recovered = mgr.recover_session(project)
+            if recovered:
+                lines.append("[COORD] Recovered session state from coordination manager")
+        except Exception:
+            pass  # Coordination unavailable
+    
+    return lines
+
+
 def handle_session_stop(payload: dict) -> dict:
     """Generate and store session summary."""
     session_id = payload.get("session_id", "")
