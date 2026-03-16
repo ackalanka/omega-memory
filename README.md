@@ -1,5 +1,7 @@
 # OMEGA
 
+<!-- mcp-name: io.github.omega-memory/omega-memory -->
+
 **AI agents that remember, coordinate, and learn. All on your machine.** Your agent's brain shouldn't live on someone else's server.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
