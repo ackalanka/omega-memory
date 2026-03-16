@@ -19,7 +19,9 @@ AI coding agents are stateless. Every new session starts from zero. And the "sol
 
 OMEGA solves this. Memory, coordination, and learning that runs entirely on your machine. No cloud. No API keys. No vendor lock-in.
 
-<!-- TODO: terminal GIF showing memory recall across sessions -->
+<p align="center">
+  <img src="assets/demo.gif" alt="OMEGA — multi-agent coordination and persistent memory" width="700">
+</p>
 
 ## Quick Install
 
