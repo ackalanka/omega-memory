@@ -2,12 +2,15 @@
 
 <!-- mcp-name: io.github.omega-memory/omega-memory -->
 
-**AI agents that remember, coordinate, and learn. All on your machine.** Your agent's brain shouldn't live on someone else's server.
+**#1 on LongMemEval (95.4%)** · 25 MCP tools · Zero cloud dependencies
+
+AI agents that remember, coordinate, and learn. All on your machine. Your agent's brain shouldn't live on someone else's server.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-1123%20passing-brightgreen.svg)]()
+[![Tests](https://img.shields.io/badge/tests-2198%20passing-brightgreen.svg)]()
+[![LongMemEval](https://img.shields.io/badge/LongMemEval-95.4%25_%231-gold.svg)](https://omegamax.co/benchmarks)
 
 ---
 
