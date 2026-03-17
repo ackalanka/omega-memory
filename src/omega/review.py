@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
 logger = logging.getLogger("omega.review")
 
@@ -29,7 +29,6 @@ def run_review(
     """
     try:
         from revue.engine import RevueEngine
-        from revue.analysis.diff_parser import parse_diff
     except ImportError:
         return (
             "# Review Unavailable\n\n"
