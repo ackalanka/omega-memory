@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-03-17
+## [1.3.1] - 2026-03-17
 
 ### Added
 - **Condensed mode**: ~80% context token savings, enabled by default (opt out with `--no-condensed`)
