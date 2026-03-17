@@ -6,6 +6,7 @@ Covers:
   - _detect_and_supersede: contradiction detection and supersession
   - _split_atomic_facts: sentence-level fact splitting
 """
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
@@ -437,6 +438,12 @@ class TestDetectAndSupersede:
 
 
 class TestSplitAtomicFacts:
+    def setup_method(self):
+        os.environ["OMEGA_ATOMIC_FACTS"] = "1"
+
+    def teardown_method(self):
+        os.environ.pop("OMEGA_ATOMIC_FACTS", None)
+
     def test_non_applicable_event_type(self):
         assert _split_atomic_facts("We use Python. Our server is fast.", "observation") == []
         assert _split_atomic_facts("We use Python. Our server is fast.", "lesson_learned") == []

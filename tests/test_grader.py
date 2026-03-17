@@ -13,11 +13,8 @@ from benchmarks.memorystress.grader import GRADE_PROMPTS, grade_answer
 
 
 def _mock_llm_result(text, input_tokens=100, output_tokens=5):
-    result = MagicMock()
-    result.text = text
-    result.input_tokens = input_tokens
-    result.output_tokens = output_tokens
-    return result
+    # grade_answer calls result.lower() directly — call_llm returns a string
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -30,10 +27,9 @@ def test_grade_answer_yes_returns_true(mock_call_llm):
     """grade_answer returns True when the LLM responds 'yes'."""
     mock_call_llm.return_value = _mock_llm_result("yes")
     question = {"question": "What color?", "answer": "blue", "question_type": "fact_recall"}
-    is_correct, inp, out = grade_answer(question, "blue")
+    is_correct, tokens = grade_answer(question, "blue")
     assert is_correct is True
-    assert inp == 100
-    assert out == 5
+    assert tokens > 0
 
 
 @patch("benchmarks.memorystress.grader.call_llm")
@@ -41,10 +37,9 @@ def test_grade_answer_no_returns_false(mock_call_llm):
     """grade_answer returns False when the LLM responds 'no'."""
     mock_call_llm.return_value = _mock_llm_result("no")
     question = {"question": "What color?", "answer": "blue", "question_type": "fact_recall"}
-    is_correct, inp, out = grade_answer(question, "red")
+    is_correct, tokens = grade_answer(question, "red")
     assert is_correct is False
-    assert inp == 100
-    assert out == 5
+    assert tokens > 0
 
 
 @patch("benchmarks.memorystress.grader.call_llm")
@@ -52,7 +47,7 @@ def test_grade_answer_case_insensitive_yes(mock_call_llm):
     """grade_answer treats 'Yes' (capital) as correct (case-insensitive check)."""
     mock_call_llm.return_value = _mock_llm_result("Yes")
     question = {"question": "What color?", "answer": "blue", "question_type": "fact_recall"}
-    is_correct, _, _ = grade_answer(question, "blue")
+    is_correct, _ = grade_answer(question, "blue")
     assert is_correct is True
 
 
@@ -140,10 +135,9 @@ def test_empty_hypothesis(mock_call_llm):
     """grade_answer handles an empty hypothesis string without errors."""
     mock_call_llm.return_value = _mock_llm_result("no")
     question = {"question": "What color?", "answer": "blue", "question_type": "fact_recall"}
-    is_correct, inp, out = grade_answer(question, "")
+    is_correct, tokens = grade_answer(question, "")
     assert is_correct is False
-    assert inp == 100
-    assert out == 5
+    assert tokens > 0
 
 
 # ---------------------------------------------------------------------------
