@@ -7,7 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-03-17
+
 ### Added
+- **Condensed mode**: ~80% context token savings, enabled by default (opt out with `--no-condensed`)
+- **Behavioral learning**: Pattern analysis engine that learns tool preferences, git style, session patterns, co-edit graphs, and workflow sequences
+- **Advisory engine**: Context-aware suggestions for file edits, errors, deployments, and session starts
+- **CrewAI integration**: Use OMEGA as CrewAI's memory backend
+- **Obsidian export**: `omega export-obsidian` command for Obsidian vault export
+- **Stats card**: `omega stats --card` for shareable stats visualization
+- **Framework support**: Added Codex CLI, Antigravity IDE, and venv Python resolution
+- **`llms-install.md`**: Agent-autonomous installation guide
+- **CLI reference**: Added `docs/cli-reference.md`
 - **Code review (`omega_review`)**: Multi-agent specialist review panel with 5 agents
   (correctness, security, performance, consistency, blast radius). Hybrid static+LLM
   analysis: 12 deterministic pattern checks (zero false positives) plus LLM for novel
@@ -15,6 +26,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for context. Confidence gating with strict/normal/verbose modes. Fast `summarize_only`
   mode for risk assessment without LLM. Pre-commit hook at `hooks/pre_review.py`.
   Standalone engine: [omega-memory/revue](https://github.com/omega-memory/revue).
+
+### Fixed
+- **`_get_store()` crash** (#48): `handlers.py` imported non-existent `omega.store` module, breaking `omega_query(mode="browse")`, `omega_stats`, `omega_reflect`, and memory link/flag/supersede actions
+- **Recursive `omega_call`**: Prevented recursive calls to meta-tools
+- **5 test failures** (#44): Resolved failing tests
+- **Windows install docs**: Collapsed into collapsible `<details>` block
+
+### Changed
+- `omega doctor --client` now supports `claude-desktop`, `cursor`, `windsurf`, `cline`, `codex`, `antigravity`, `venv` (was only `claude-code`)
+- `export`/`import` CLI subcommands removed (use `omega export-obsidian` for exports)
 
 ## [1.2.0] - 2026-03-04
 
