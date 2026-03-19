@@ -425,6 +425,7 @@ class TestInjectSettingsHooks:
             ],
         }
         (self.data_dir / "hooks.json").write_text(json.dumps(manifest))
+        (self.data_dir / "hooks-core.json").write_text(json.dumps(manifest))
 
         monkeypatch.setattr("omega.cli.SETTINGS_JSON_PATH", self.settings_json)
         monkeypatch.setattr("omega.cli.DATA_DIR", self.data_dir)

@@ -87,9 +87,12 @@ class BehavioralAnalyzer:
     def _get_conn(self) -> sqlite3.Connection:
         if self._conn is not None:
             return self._conn
-        from omega.coordination import get_manager
-        mgr = get_manager()
-        return mgr.get_read_connection()
+        try:
+            from omega.coordination import get_manager
+            mgr = get_manager()
+            return mgr.get_read_connection()
+        except ImportError:
+            return None
 
     def _table_exists(self, table_name: str) -> bool:
         row = self._get_conn().execute(

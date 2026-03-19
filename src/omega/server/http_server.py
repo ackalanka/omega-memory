@@ -102,9 +102,12 @@ async def run_http(host: str, port: int, api_key: str | None) -> None:
     import uvicorn
 
     from omega.server.mcp_server import server, _wire_plugin_retrieval
-    from omega.server.hook_server import start_hook_server
 
-    await start_hook_server()
+    try:
+        from omega.server.hook_server import start_hook_server
+        await start_hook_server()
+    except ImportError:
+        pass
     _wire_plugin_retrieval()
 
     app = create_http_app(server, api_key=api_key)

@@ -433,7 +433,11 @@ async def _socket_watchdog():
     if sys.platform == "win32":
         return  # TCP server doesn't need file watchdog
 
-    from omega.server.hook_server import SOCK_PATH, start_hook_server
+    try:
+        from omega.server.hook_server import SOCK_PATH, start_hook_server
+    except ImportError:
+        logger.debug("hook_server not available, socket watchdog disabled")
+        return
 
     while True:
         await asyncio.sleep(15)
@@ -849,7 +853,12 @@ async def _run_http_transport(hook_srv) -> None:
         })
 
     import contextlib
-    from omega.server.hook_server import stop_hook_server as _stop_hook_srv
+
+    try:
+        from omega.server.hook_server import stop_hook_server as _stop_hook_srv
+    except ImportError:
+        async def _stop_hook_srv(*args, **kwargs):
+            pass
 
     @contextlib.asynccontextmanager
     async def lifespan(app):
@@ -961,7 +970,13 @@ async def main():
         pass
 
     # Start UDS hook server for fast hook dispatch
-    from omega.server.hook_server import start_hook_server, stop_hook_server
+    try:
+        from omega.server.hook_server import start_hook_server, stop_hook_server
+    except ImportError:
+        async def start_hook_server(*args, **kwargs):
+            return None
+        async def stop_hook_server(*args, **kwargs):
+            pass
 
     hook_srv = await start_hook_server()
 

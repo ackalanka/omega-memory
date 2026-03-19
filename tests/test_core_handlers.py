@@ -324,33 +324,7 @@ class TestOmegaWelcome:
 # ===========================================================================
 
 
-class TestOmegaProtocol:
-
-    def test_protocol_basic(self):
-        from omega.server.handlers import handle_omega_protocol
-        result = run_async(handle_omega_protocol({}))
-        assert not _is_error(result)
-        text = _text(result)
-        assert len(text) > 50  # protocol should be substantial
-
-    def test_protocol_gate_status(self):
-        from omega.server.handlers import handle_omega_protocol
-        result = run_async(handle_omega_protocol({"section": "gate_status"}))
-        assert not _is_error(result)
-        text = _text(result)
-        assert "gate" in text.lower()
-        # Should contain diagnostic fields
-        assert "gate_call_count" in text or "protocol_calls" in text
-
-    def test_protocol_with_session_id(self):
-        from omega.server.handlers import handle_omega_protocol
-        result = run_async(handle_omega_protocol({"session_id": "proto-test-session"}))
-        assert not _is_error(result)
-
-    def test_protocol_with_project(self):
-        from omega.server.handlers import handle_omega_protocol
-        result = run_async(handle_omega_protocol({"project": "/tmp/proto-project"}))
-        assert not _is_error(result)
+# TestOmegaProtocol removed — protocol module is pro-only
 
 
 # ===========================================================================
