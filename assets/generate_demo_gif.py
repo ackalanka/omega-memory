@@ -3,6 +3,7 @@
 Creates a simulated terminal session showing install, setup, and memory recall.
 Each frame has an explicit duration -- no duplicate frames needed.
 """
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 # --- Configuration ---
@@ -263,7 +264,7 @@ def main():
     total_ms = sum(durations)
     print(f"Total duration: {total_ms / 1000:.1f}s")
 
-    output_path = ".//assets/demo.gif"
+    output_path = str(Path(__file__).parent / "demo.gif")
     print(f"Saving GIF to {output_path}...")
 
     # Convert frames to P mode (palette) for better GIF compatibility

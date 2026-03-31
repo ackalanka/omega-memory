@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   issues. Memory-powered: uses OMEGA conventions, past incidents, and team preferences
   for context. Confidence gating with strict/normal/verbose modes. Fast `summarize_only`
   mode for risk assessment without LLM. Pre-commit hook at `hooks/pre_review.py`.
-  Standalone engine: [omega-memory/revue](https://github.com/omega-memory/revue).
+  Standalone engine available separately (see revue).
 
 ## [1.2.0] - 2026-03-04
 

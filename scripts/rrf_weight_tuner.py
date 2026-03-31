@@ -112,9 +112,9 @@ EVAL_QUERIES: List[EvalQuery] = [
 
     # --- Temporal ---
     EvalQuery(
-        query="what happened with acme-app convergence",
-        expected_keywords=["acme-app", "convergence", "orchestrator", "conductor"],
-        description="Temporal/project: Acme App convergence",
+        query="what happened with the project migration convergence",
+        expected_keywords=["migration", "convergence", "orchestrator", "consolidate"],
+        description="Temporal/project: migration convergence",
     ),
 
     # --- Multi-concept ---

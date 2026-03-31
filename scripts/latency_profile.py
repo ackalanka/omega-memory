@@ -189,7 +189,7 @@ def main():
     # Representative queries (mix of expected fast and slow)
     queries = [
         ("navigational", "what is the OMEGA version number"),
-        ("factual", "acme-app convergence status"),
+        ("factual", "project migration convergence status"),
         ("conceptual", "how does the memory system handle conflicts between agents"),
         ("vague", "what happened recently"),
         ("keyword", "pyproject.toml license field"),

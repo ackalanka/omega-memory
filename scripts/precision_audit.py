@@ -146,7 +146,7 @@ TEST_QUERIES: List[Tuple[str, str, List[str]]] = [
     (
         "conversational",
         "the convergence decision",
-        ["convergence", "orchestrator", "conductor", "acme-app", "absorb"],
+        ["convergence", "orchestrator", "merge", "consolidate", "absorb"],
     ),
     (
         "conversational",

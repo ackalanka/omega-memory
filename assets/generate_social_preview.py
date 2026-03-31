@@ -1,4 +1,5 @@
 """Generate social preview image for omega-memory/omega-memory GitHub repo."""
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 WIDTH, HEIGHT = 1280, 640
@@ -142,5 +143,5 @@ for color, text in lines:
         draw.text((TERM_X + 20, ty), text, fill=color, font=FONT_MONO_16)
     ty += line_h
 
-img.save(".//assets/social-preview.png", quality=95)
+img.save(Path(__file__).parent / "social-preview.png", quality=95)
 print(f"Saved: 1280x640")

@@ -114,7 +114,7 @@ def main():
                 "category": "system_insight",
                 "tags": insight["tags"],
             },
-            project=".",
+            project="omega",
             entity_id="omega",
         )
         print(f"  [{i+1}/{len(INSIGHTS)}] {result.strip()[:100]}")

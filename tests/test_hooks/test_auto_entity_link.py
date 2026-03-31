@@ -27,7 +27,7 @@ def test_cross_project_link():
 
     claims = [
         {"file_path": "/Users/dev/Projects/omega/src/bridge.py"},
-        {"file_path": "/Users/dev/Projects/acme-app/lib/conductor.ts"},
+        {"file_path": "/Users/dev/Projects/acme-app/lib/utils.ts"},
     ]
     links = _build_entity_links(claims, current_project="omega")
 
