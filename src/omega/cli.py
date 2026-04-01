@@ -2887,6 +2887,25 @@ def cmd_license(args):
             print("\nUpgrade at https://omegamemory.com/pro")
 
 
+def cmd_export_obsidian(args):
+    """Export memories as Obsidian-compatible markdown files."""
+    from omega.obsidian_export import export_to_obsidian
+
+    output_dir = getattr(args, "output_dir", "./omega-vault")
+    project = getattr(args, "project", None)
+    limit = getattr(args, "limit", 0)
+
+    result = export_to_obsidian(
+        output_dir=output_dir,
+        project=project,
+        limit=limit,
+    )
+
+    print(f"Exported {result['memories_exported']} memories "
+          f"({result['edge_links_created']} edges) to {result['output_dir']}")
+    print(f"Index file: {result['index_file']}")
+
+
 def cmd_eval_retrieval(args):
     """Evaluate retrieval quality with probe queries."""
     from omega.evaluation.retrieval_eval import format_report, run_evaluation
@@ -3120,6 +3139,12 @@ def main():
     mobile_serve_parser.add_argument("--port", type=int, default=8089, help="HTTP port (default: 8089)")
     mobile_serve_parser.add_argument("--host", default="127.0.0.1", help="Bind address (default: 127.0.0.1)")
 
+    # --- Obsidian export ---
+    obsidian_parser = subparsers.add_parser("export-obsidian", help="Export memories as Obsidian-compatible markdown files")
+    obsidian_parser.add_argument("--output-dir", default="./omega-vault", help="Root directory for exported vault (default: ./omega-vault)")
+    obsidian_parser.add_argument("--project", help="Only export memories for this project")
+    obsidian_parser.add_argument("--limit", type=int, default=0, help="Max memories to export (default: all)")
+
     # --- Evaluation commands ---
     eval_parser = subparsers.add_parser("eval-retrieval", help="Evaluate retrieval quality with probe queries")
     eval_parser.add_argument("--sample-size", type=int, default=20, help="Number of memories to probe (default: 20)")
@@ -3162,6 +3187,7 @@ def main():
         "cloud": cmd_cloud,
         "mobile": cmd_mobile,
         "eval-retrieval": cmd_eval_retrieval,
+        "export-obsidian": cmd_export_obsidian,
     }
 
     # Wire plugin CLI commands (omega-pro, etc.)
