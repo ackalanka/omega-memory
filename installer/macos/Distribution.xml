@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>OMEGA Memory</title>
+    <organization>com.omega</organization>
+    <domains enable_currentUserHome="true"/>
+    <options customize="never" require-scripts="false" hostArchitectures="arm64,x86_64"/>
+
+    <!-- No admin privileges required -->
+    <volume-check>
+        <allowed-os-versions>
+            <os-version min="12.0"/>
+        </allowed-os-versions>
+    </volume-check>
+
+    <!-- Installer pages -->
+    <welcome file="welcome.html" mime-type="text/html"/>
+    <license file="LICENSE"/>
+    <conclusion file="conclusion.html" mime-type="text/html"/>
+
+    <!-- Single choice: install OMEGA -->
+    <choices-outline>
+        <line choice="default">
+            <line choice="com.omega.memory"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+    <choice id="com.omega.memory" visible="false">
+        <pkg-ref id="com.omega.memory"/>
+    </choice>
+
+    <pkg-ref id="com.omega.memory"
+             version="1.0.0"
+             onConclusion="none"
+             auth="none">omega-memory.pkg</pkg-ref>
+</installer-gui-script>

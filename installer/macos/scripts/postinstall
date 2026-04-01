@@ -1,0 +1,26 @@
+#!/bin/bash
+# OMEGA Memory -- macOS postinstall script
+# Runs after .pkg payload is installed to ~/Library/OMEGA.
+# Configures Claude Desktop and initializes OMEGA data directory.
+
+set -euo pipefail
+
+INSTALL_DIR="$HOME/Library/OMEGA"
+PYTHON="$INSTALL_DIR/python/bin/python3"
+CONFIGURE="$INSTALL_DIR/configure_claude.py"
+
+echo "OMEGA: Running post-install configuration..."
+
+# Configure Claude Desktop (inject MCP server entry)
+if [ -f "$CONFIGURE" ]; then
+    "$PYTHON" "$CONFIGURE" --install-dir "$INSTALL_DIR"
+else
+    echo "WARNING: configure_claude.py not found at $CONFIGURE"
+    exit 1
+fi
+
+# Run omega setup to initialize data directory (~/.omega)
+"$PYTHON" -m omega setup 2>/dev/null || echo "WARNING: omega setup did not complete (will retry on first use)"
+
+echo "OMEGA: Installation complete. Restart Claude Desktop to use OMEGA."
+exit 0
