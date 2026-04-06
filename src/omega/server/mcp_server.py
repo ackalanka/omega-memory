@@ -84,7 +84,7 @@ if _pro_licensed:
 else:
     logging.getLogger("omega.server").info(
         "Pro modules available — run 'omega activate <key>' to unlock. "
-        "Upgrade at https://omegamemory.com/pro"
+        "Upgrade at https://omegamax.co/pro?ref=mcp-startup"
     )
 
 # Discover external plugins (e.g. omega-pro)

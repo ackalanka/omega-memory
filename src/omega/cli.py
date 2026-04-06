@@ -1111,6 +1111,11 @@ def cmd_setup(args):
         sys.exit(1)
     else:
         print("OMEGA setup complete!")
+        try:
+            from omega.telemetry import track_event
+            track_event("setup_complete", {"client": client or "none"})
+        except Exception:
+            pass
         for step in steps_done:
             print(f"  [OK] {step}")
         for step in steps_skipped:
@@ -1121,6 +1126,29 @@ def cmd_setup(args):
                 print(f"    {f}")
         print(f"\n  Storage: {OMEGA_DIR}")
         print("  Run 'omega doctor' to verify.")
+
+        # Pro upgrade CTA on first install (skip if already licensed)
+        _show_pro = True
+        try:
+            from omega.license import is_pro
+            if is_pro():
+                _show_pro = False
+        except Exception:
+            pass
+        if _show_pro:
+            print()
+            print("  ┌─────────────────────────────────────────────────┐")
+            print("  │  Unlock the full platform with OMEGA Pro        │")
+            print("  │                                                 │")
+            print("  │  + 98 Pro tools: coordination, LLM routing,     │")
+            print("  │    knowledge base, entity management, oracle    │")
+            print("  │  + Multi-agent coordination (53 tools)          │")
+            print("  │  + Cloud sync via your own Supabase             │")
+            print("  │                                                 │")
+            print("  │  $19/mo  ·  14-day money-back guarantee         │")
+            print("  │  Run: omega upgrade                             │")
+            print("  │  Or visit: https://omegamax.co/pro?ref=cli-setup │")
+            print("  └─────────────────────────────────────────────────┘")
 
 
 def cmd_status(args):
@@ -1272,6 +1300,15 @@ def cmd_status(args):
         print_kv(cloud_kv)
     else:
         print_kv([("Cloud", "not configured")])
+
+    # Pro upgrade nudge for free users
+    if not use_json:
+        try:
+            from omega.license import is_pro
+            if not is_pro():
+                print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
+        except Exception:
+            print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
 
     print()
 
@@ -2623,6 +2660,16 @@ def cmd_doctor(args):
     else:
         print()
         print_summary(errors, warnings)
+
+    # Pro upgrade nudge for free users
+    if not use_json:
+        try:
+            from omega.license import is_pro
+            if not is_pro():
+                print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
+        except Exception:
+            print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
+
     sys.exit(1 if errors > 0 else 0)
 
 
@@ -2834,6 +2881,24 @@ def cmd_mobile(args):
     else:
         print("Usage: omega mobile {setup|serve}")
         print("\nMobile access via mcp-proxy + Tailscale.")
+
+
+def cmd_upgrade(args):
+    """Open the Pro purchase page in the browser."""
+    import webbrowser
+
+    url = "https://omegamax.co/pro?ref=cli-upgrade"
+    print("Opening OMEGA Pro purchase page...")
+    print(f"  {url}")
+    print()
+    print("After purchase, activate with:")
+    print("  omega activate <your-license-key>")
+    try:
+        from omega.telemetry import track_event
+        track_event("upgrade_opened")
+    except Exception:
+        pass
+    webbrowser.open(url)
 
 
 def cmd_activate(args):
@@ -3076,6 +3141,8 @@ def main():
     embed_sub.add_parser("status", help="Show daemon status")
 
     # --- License commands ---
+    subparsers.add_parser("upgrade", help="Open Pro purchase page in browser")
+
     activate_parser = subparsers.add_parser("activate", help="Activate a Pro license key")
     activate_parser.add_argument("key", help="License key (OMEGA-PRO-...)")
 
@@ -3179,6 +3246,7 @@ def main():
         "proxy": cmd_proxy,
         "hooks": cmd_hooks,
         "embed-daemon": cmd_embed_daemon,
+        "upgrade": cmd_upgrade,
         "activate": cmd_activate,
         "license": cmd_license,
         "remind": cmd_remind,

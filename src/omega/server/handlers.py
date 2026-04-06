@@ -61,11 +61,58 @@ def _is_coord_status_checked(session_id: str | None = None, max_age_sec: int = 1
         return False  # fail-closed
 
 
+def _is_pro_available() -> bool:
+    """Check if pro modules are available."""
+    try:
+        from omega.license import is_pro
+        return is_pro()
+    except Exception:
+        return False
+
+
+# Nagware: periodic upgrade reminder for free users
+_tool_call_count = 0
+_NAG_INTERVAL = 25  # Show upgrade prompt every N tool calls
+
+
+def _maybe_nag() -> str:
+    """Return upgrade nudge text every _NAG_INTERVAL calls, empty string otherwise."""
+    global _tool_call_count
+    _tool_call_count += 1
+    if _tool_call_count % _NAG_INTERVAL != 0:
+        return ""
+    try:
+        from omega.server.mcp_server import _pro_licensed
+        if _pro_licensed:
+            return ""
+    except Exception:
+        return ""
+    try:
+        from omega.telemetry import track_nag
+        track_nag("periodic")
+    except Exception:
+        pass
+    return (
+        "\n\n---\n*Unlock 98 Pro tools: coordination, routing, knowledge base, and more. "
+        "$19/mo at https://omegamax.co/pro?ref=nag*"
+    )
+
+
+def _pro_licensed_check() -> bool:
+    """Check if Pro is licensed (cached import)."""
+    try:
+        from omega.server.mcp_server import _pro_licensed
+        return _pro_licensed
+    except Exception:
+        return False
+
+
 def is_deploy_gate_cleared(session_id: str | None = None, max_age_sec: int = 1800) -> bool:
     """Check if the deploy gate was cleared recently (default: 30 min).
 
-    Requires BOTH omega_query(event_type="decision") AND omega_coord_status
-    to have been called. Checks session-specific markers first, then 'default'.
+    Requires omega_query(event_type="decision") to have been called.
+    Also requires omega_coord_status if pro modules are available.
+    Checks session-specific markers first, then 'default'.
     """
     try:
         # Check decision query marker
@@ -84,7 +131,10 @@ def is_deploy_gate_cleared(session_id: str | None = None, max_age_sec: int = 180
         if not decision_ok:
             return False
 
-        # Also require coord_status check
+        # Require coord_status check only when pro is available
+        if not _is_pro_available():
+            return True
+
         return _is_coord_status_checked(session_id, max_age_sec)
     except Exception as e:
         logger.debug("Deploy gate check failed: %s", e)
@@ -419,6 +469,39 @@ async def handle_omega_store(arguments: dict) -> dict:
             except Exception as e:
                 logger.debug("attach_finding skipped: %s", e)
 
+        # Track tool call for telemetry
+        try:
+            from omega.telemetry import track_tool_call
+            track_tool_call("omega_store")
+        except Exception:
+            pass
+
+        nag = _maybe_nag()
+        if nag and isinstance(result, str):
+            result = result + nag
+
+        # Milestone-based upgrade nudge at memory count thresholds
+        if not _pro_licensed_check():
+            try:
+                from omega.bridge import _get_store
+                _store = _get_store()
+                count = _store.count_memories() if hasattr(_store, 'count_memories') else None
+                if count and count in (500, 1000, 2000, 5000):
+                    milestone_msg = (
+                        f"\n\n**You've stored {count} memories.** "
+                        "Pro users get multi-agent coordination, LLM routing, and knowledge base "
+                        f"to make the most of this data. $19/mo: https://omegamax.co/pro?ref=milestone-{count}"
+                    )
+                    if isinstance(result, str):
+                        result = result + milestone_msg
+                    try:
+                        from omega.telemetry import track_nag
+                        track_nag("milestone")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
         return mcp_response(result)
     except Exception as e:
         logger.error("omega_store failed: %s", e, exc_info=True)
@@ -573,6 +656,16 @@ async def handle_omega_query(arguments: dict) -> dict:
         if event_type == "decision":
             _mark_deploy_gate_cleared(session_id)
 
+        # Track tool call for telemetry
+        try:
+            from omega.telemetry import track_tool_call
+            track_tool_call("omega_query")
+        except Exception:
+            pass
+
+        nag = _maybe_nag()
+        if nag and isinstance(result, str):
+            result = result + nag
         return mcp_response(result)
     except Exception as e:
         logger.error("omega_query failed: %s", e, exc_info=True)
@@ -688,6 +781,13 @@ async def handle_omega_welcome(arguments: dict) -> dict:
     except Exception as e:
         logger.debug("mark_protocol_call (welcome) failed: %s", e)
 
+    # Track session start for telemetry
+    try:
+        from omega.telemetry import track_event
+        track_event("session_start")
+    except Exception:
+        pass
+
     # Register this session in coordination — the MCP handler is the most
     # reliable registration path because it runs in-process (no subprocess
     # timeout, correct PID).  The coord_session_start hook often times out
@@ -767,6 +867,26 @@ async def handle_omega_welcome(arguments: dict) -> dict:
         if nudges:
             next_steps += "\n**Also recommended**: " + " | ".join(nudges)
         stable_parts.append("---\n" + next_steps)
+
+        # Pro upgrade nudge for free users
+        try:
+            from omega.server.mcp_server import _pro_licensed
+            if not _pro_licensed:
+                stable_parts.append(
+                    "\n---\n"
+                    "**Upgrade to Pro** -- You're using 17 free tools. "
+                    "Pro unlocks 98 more: multi-agent coordination, LLM routing, "
+                    "knowledge base, entity management, and oracle intelligence. "
+                    "$19/mo, 14-day money-back guarantee.\n"
+                    "-> Run `omega upgrade` or visit https://omegamax.co/pro?ref=welcome"
+                )
+                try:
+                    from omega.telemetry import track_nag
+                    track_nag("welcome")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
         # Join with cache breakpoint between stable and volatile
         parts = stable_parts
@@ -2379,7 +2499,7 @@ async def handle_omega_milestones(arguments: dict) -> dict:
 
         return mcp_response(output)
     except ImportError:
-        return mcp_error("Milestones require OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Milestones require OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_milestones failed: %s", e, exc_info=True)
         return mcp_error(f"Milestones query failed: {e}")
@@ -2458,7 +2578,7 @@ async def _handle_habits_list(arguments: dict) -> dict:
 
         return mcp_response("\n".join(lines))
     except ImportError:
-        return mcp_error("Behavioral patterns require OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Behavioral patterns require OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_habits list failed: %s", e, exc_info=True)
         return mcp_error(f"Failed to list habits: {e}")
@@ -2551,7 +2671,7 @@ async def _handle_habits_analyze(arguments: dict) -> dict:
             lines.append("\nUse `omega_habits(action='list')` to see all patterns.")
         return mcp_response("\n".join(lines))
     except ImportError:
-        return mcp_error("Behavioral analysis requires OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Behavioral analysis requires OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_habits analyze failed: %s", e, exc_info=True)
         return mcp_error(f"Behavioral analysis failed: {e}")
@@ -2596,7 +2716,7 @@ async def _handle_habits_profile(arguments: dict) -> dict:
 
         return mcp_response("\n".join(lines))
     except ImportError:
-        return mcp_error("Behavioral profile requires OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Behavioral profile requires OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_habits profile failed: %s", e, exc_info=True)
         return mcp_error(f"Profile generation failed: {e}")
@@ -2625,7 +2745,7 @@ async def _handle_habits_recommendations(arguments: dict) -> dict:
 
         return mcp_response("\n".join(lines))
     except ImportError:
-        return mcp_error("Behavioral recommendations require OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Behavioral recommendations require OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_habits recommendations failed: %s", e, exc_info=True)
         return mcp_error(f"Recommendations failed: {e}")
@@ -2684,7 +2804,7 @@ async def _handle_reflect_contradictions(arguments: dict) -> dict:
 
         return mcp_response(output)
     except ImportError:
-        return mcp_error("Contradiction analysis requires OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Contradiction analysis requires OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_reflect contradictions failed: %s", e, exc_info=True)
         return mcp_error(f"Contradiction audit failed: {e}")
@@ -2734,7 +2854,7 @@ async def _handle_reflect_evolution(arguments: dict) -> dict:
 
         return mcp_response(output)
     except ImportError:
-        return mcp_error("Evolution tracing requires OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Evolution tracing requires OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_reflect evolution failed: %s", e, exc_info=True)
         return mcp_error(f"Evolution trace failed: {e}")
@@ -2786,7 +2906,7 @@ async def _handle_reflect_stale(arguments: dict) -> dict:
 
         return mcp_response(output)
     except ImportError:
-        return mcp_error("Stale memory analysis requires OMEGA Pro. Learn more: https://omegamax.co")
+        return mcp_error("Stale memory analysis requires OMEGA Pro. Upgrade at https://omegamax.co/pro?ref=feature-gate")
     except Exception as e:
         logger.error("omega_reflect stale failed: %s", e, exc_info=True)
         return mcp_error(f"Stale audit failed: {e}")
@@ -2942,23 +3062,45 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
         return mcp_error(f"Unknown tool: {tool_name}")
 
     # List all tools, optionally filtered by category
+    # Only show tools that have a registered handler (or are meta-tools)
+    meta_tools = {"omega_tools", "omega_call"}
     lines = []
     for schema in _ALL_SCHEMAS:
-        cat = TOOL_CATEGORIES.get(schema["name"], "other")
+        name = schema["name"]
+        if name not in _ALL_HANDLERS and name not in meta_tools:
+            continue
+        cat = TOOL_CATEGORIES.get(name, "other")
         if category != "all" and cat != category:
             continue
-        lines.append(f"- **{schema['name']}** [{cat}]: {schema['description']}")
+        lines.append(f"- **{name}** [{cat}]: {schema['description']}")
 
-    if not lines:
+    # Show Pro-only tools (not loaded for free users)
+    pro_lines = []
+    for name, cat in sorted(TOOL_CATEGORIES.items()):
+        if name not in _ALL_HANDLERS and name not in ("omega_tools", "omega_call"):
+            if not category or category == "all" or cat == category:
+                pro_lines.append(f"- **{name}** [{cat}] [PRO] -- requires Pro license")
+
+    if not lines and not pro_lines:
         return mcp_response(f"No tools found in category '{category}'.")
 
     header = f"Available OMEGA tools ({len(lines)}):\n\n"
     footer = "\n\nUse omega_tools(tool='name') to get the full input schema for any tool."
-    return mcp_response(header + "\n".join(lines) + footer)
+    body = "\n".join(lines)
+
+    if pro_lines:
+        body += "\n"
+        body += f"\n**Pro-only tools ({len(pro_lines)})** -- `omega upgrade` to unlock:\n"
+        body += "\n".join(pro_lines)
+        body += f"\n\n-> Upgrade: https://omegamax.co/pro?ref=tools-list"
+
+    return mcp_response(header + body + footer)
 
 
 async def handle_omega_call(args: Dict[str, Any]) -> dict:
     """Execute any OMEGA tool by name with arguments."""
+    from omega.server.tool_schemas import TOOL_CATEGORIES
+
     tool_name = args.get("tool")
     tool_args = args.get("args") or {}
 
@@ -2970,6 +3112,17 @@ async def handle_omega_call(args: Dict[str, Any]) -> dict:
 
     handler = _ALL_HANDLERS.get(tool_name)
     if not handler:
+        if tool_name in TOOL_CATEGORIES:
+            try:
+                from omega.telemetry import track_nag
+                track_nag("tool_gate")
+            except Exception:
+                pass
+            return mcp_error(
+                f"Tool '{tool_name}' requires OMEGA Pro ($19/mo). "
+                "Run 'omega upgrade' to purchase, or 'omega activate <key>' if you have a license.\n"
+                "14-day money-back guarantee. Details: https://omegamax.co/pro?ref=tool-gate"
+            )
         return mcp_error(f"Unknown tool: {tool_name}. Use omega_tools() to list available tools.")
 
     return await handler(tool_args)
