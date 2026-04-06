@@ -1,6 +1,6 @@
 [project]
 name = "omega-memory"
-version = "1.4.0"
+version = "1.4.1"
 description = "Local-first intelligence layer for AI agents — memory, coordination, and learning on your machine"
 readme = "README.md"
 requires-python = ">=3.11"

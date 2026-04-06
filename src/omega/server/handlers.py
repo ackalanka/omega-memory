@@ -393,6 +393,28 @@ async def handle_omega_store(arguments: dict) -> dict:
         metadata = dict(metadata or {})
         metadata["status"] = status
 
+    # Quality degradation notice for free users over 2,000 memories
+    # (stores still allowed, but search degrades to keyword-only after 2,000)
+    _degraded_notice = ""
+    if not _pro_licensed_check():
+        try:
+            from omega.bridge import _get_store
+            _store = _get_store()
+            _mem_count = _store.count_memories() if hasattr(_store, 'count_memories') else None
+            if _mem_count is not None and _mem_count >= 2000:
+                _degraded_notice = (
+                    "\n\n**Note:** Semantic search is degraded above 2,000 memories on the free tier "
+                    "(keyword-only, no vector similarity). "
+                    "Upgrade to Pro for full hybrid retrieval at any scale: https://omegamax.co/pro?ref=degraded-store"
+                )
+                try:
+                    from omega.telemetry import track_nag
+                    track_nag("quality_degraded")
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
     try:
         from omega.bridge import store
 
@@ -486,12 +508,19 @@ async def handle_omega_store(arguments: dict) -> dict:
                 from omega.bridge import _get_store
                 _store = _get_store()
                 count = _store.count_memories() if hasattr(_store, 'count_memories') else None
-                if count and count in (500, 1000, 2000, 5000):
-                    milestone_msg = (
-                        f"\n\n**You've stored {count} memories.** "
-                        "Pro users get multi-agent coordination, LLM routing, and knowledge base "
-                        f"to make the most of this data. $19/mo: https://omegamax.co/pro?ref=milestone-{count}"
-                    )
+                if count and count in (500, 1000, 1800):
+                    if count == 1800:
+                        milestone_msg = (
+                            "\n\n**You're approaching the free tier limit (1,800/2,000 memories).** "
+                            "Upgrade to OMEGA Pro for unlimited memories, multi-agent coordination, "
+                            "LLM routing, and more. $19/mo: https://omegamax.co/pro?ref=milestone-1800"
+                        )
+                    else:
+                        milestone_msg = (
+                            f"\n\n**You've stored {count} memories.** "
+                            "Pro users get multi-agent coordination, LLM routing, and knowledge base "
+                            f"to make the most of this data. $19/mo: https://omegamax.co/pro?ref=milestone-{count}"
+                        )
                     if isinstance(result, str):
                         result = result + milestone_msg
                     try:
@@ -501,6 +530,9 @@ async def handle_omega_store(arguments: dict) -> dict:
                         pass
             except Exception:
                 pass
+
+        if _degraded_notice and isinstance(result, str):
+            result = result + _degraded_notice
 
         return mcp_response(result)
     except Exception as e:
@@ -627,30 +659,63 @@ async def handle_omega_query(arguments: dict) -> dict:
         except ImportError:
             pass
 
-    try:
-        from omega.bridge import query
+    # Quality degradation: free users over 2,000 memories get keyword-only search
+    _search_degraded = False
+    if not _pro_licensed_check():
+        try:
+            from omega.bridge import _get_store
+            _store = _get_store()
+            _mem_count = _store.count_memories() if hasattr(_store, 'count_memories') else None
+            if _mem_count is not None and _mem_count >= 2000:
+                _search_degraded = True
+        except Exception:
+            pass
 
-        result = query(
-            query_text=query_text,
-            limit=limit,
-            event_type=event_type,
-            project=project,
-            session_id=session_id,
-            context_file=context_file,
-            context_tags=context_tags,
-            filter_tags=filter_tags,
-            temporal_range=temporal_range,
-            entity_id=entity_id,
-            agent_type=agent_type,
-            scope=scope,
-            surfacing_context=surfacing_context,
-            perspective=perspective,
-            strength_min=strength_min,
-            memory_type=memory_type,
-            include_contradicted=include_contradicted,
-            valid_at=valid_at,
-            status=status_filter,
-        )
+    try:
+        if _search_degraded:
+            # Degraded mode: FTS5 keyword search only (no vector similarity, no reranking)
+            from omega.bridge import phrase_search
+            result = phrase_search(
+                phrase=query_text,
+                limit=limit,
+                event_type=event_type,
+                project=project,
+            )
+            if isinstance(result, str):
+                result = (
+                    result + "\n\n---\n*Search quality is reduced above 2,000 memories on the free tier "
+                    "(keyword-only, no semantic matching). "
+                    "Upgrade to Pro for full hybrid retrieval: https://omegamax.co/pro?ref=degraded-search*"
+                )
+            try:
+                from omega.telemetry import track_nag
+                track_nag("quality_degraded")
+            except Exception:
+                pass
+        else:
+            from omega.bridge import query
+
+            result = query(
+                query_text=query_text,
+                limit=limit,
+                event_type=event_type,
+                project=project,
+                session_id=session_id,
+                context_file=context_file,
+                context_tags=context_tags,
+                filter_tags=filter_tags,
+                temporal_range=temporal_range,
+                entity_id=entity_id,
+                agent_type=agent_type,
+                scope=scope,
+                surfacing_context=surfacing_context,
+                perspective=perspective,
+                strength_min=strength_min,
+                memory_type=memory_type,
+                include_contradicted=include_contradicted,
+                valid_at=valid_at,
+                status=status_filter,
+            )
 
         # Mark deploy gate as cleared when querying decisions
         if event_type == "decision":

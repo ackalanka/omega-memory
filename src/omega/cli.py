@@ -1310,6 +1310,9 @@ def cmd_status(args):
         except Exception:
             print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
 
+    if not use_json:
+        _offer_email_capture()
+
     print()
 
 
@@ -2670,6 +2673,9 @@ def cmd_doctor(args):
         except Exception:
             print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
 
+    if not use_json:
+        _offer_email_capture()
+
     sys.exit(1 if errors > 0 else 0)
 
 
@@ -2881,6 +2887,57 @@ def cmd_mobile(args):
     else:
         print("Usage: omega mobile {setup|serve}")
         print("\nMobile access via mcp-proxy + Tailscale.")
+
+
+def _offer_email_capture():
+    """Offer email capture for users approaching or at the memory cap."""
+    try:
+        import sqlite3
+        from pathlib import Path
+        db_path = Path.home() / ".omega" / "omega.db"
+        if not db_path.exists():
+            return
+        conn = sqlite3.connect(str(db_path), timeout=5)
+        count = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+        if count < 1800:
+            return
+
+        # Check if already captured
+        telemetry_path = Path.home() / ".omega" / "telemetry.json"
+        if telemetry_path.exists():
+            import json as _json
+            data = _json.loads(telemetry_path.read_text())
+            if data.get("email_captured"):
+                return
+
+        print()
+        print(f"  You have {count} memories" + (" (limit: 2,000)" if count < 2000 else " (at free tier limit)") + ".")
+        print("  Get product updates and early access to new features.")
+        email = input("  Email (or press Enter to skip): ").strip()
+
+        if email and "@" in email:
+            import urllib.request
+            import json as _json
+            data = _json.dumps({"email": email, "source": "cli_cap", "metadata": {"memory_count": count}}).encode()
+            req = urllib.request.Request(
+                "https://admin.omegamax.co/api/subscribe",
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="POST"
+            )
+            try:
+                urllib.request.urlopen(req, timeout=5)
+                print("  Thanks! We'll keep you posted.")
+                # Mark as captured in telemetry
+                if telemetry_path.exists():
+                    tdata = _json.loads(telemetry_path.read_text())
+                    tdata["email_captured"] = True
+                    telemetry_path.write_text(_json.dumps(tdata, indent=2))
+            except Exception:
+                print("  Saved. Thanks!")
+    except Exception:
+        pass
 
 
 def cmd_upgrade(args):
