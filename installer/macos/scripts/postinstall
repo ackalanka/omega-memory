@@ -22,5 +22,15 @@ fi
 # Run omega setup to initialize data directory (~/.omega)
 "$PYTHON" -m omega setup 2>/dev/null || echo "WARNING: omega setup did not complete (will retry on first use)"
 
-echo "OMEGA: Installation complete. Restart Claude Desktop to use OMEGA."
+echo "OMEGA: Installation complete!"
+echo ""
+echo "Next steps:"
+echo "  1. Restart Claude Desktop"
+echo "  2. Say 'What MCP tools do you have?' to verify OMEGA loaded"
+echo ""
+echo "Opening quickstart guide..."
+
+# Open quickstart guide in browser
+open "https://omegamax.co/quickstart?ref=installer-mac" 2>/dev/null || true
+
 exit 0
