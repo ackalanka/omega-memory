@@ -30,6 +30,22 @@ omega setup                         # Downloads model, registers MCP, installs h
 omega doctor                        # Verify everything works
 ```
 
+### Claude Desktop
+
+```bash
+pip install omega-memory[server]
+omega setup --client claude-desktop
+```
+
+This registers OMEGA as an MCP server in Claude Desktop's config. Restart Claude Desktop to activate.
+
+### Cursor, Windsurf, Cline, Codex
+
+```bash
+pip install omega-memory[server]
+omega setup --client cursor      # or: windsurf, cline, codex
+```
+
 <details>
 <summary><strong>Library-only install (no MCP server)</strong></summary>
 
@@ -66,7 +82,7 @@ omega setup
 `omega setup` will:
 1. Create `~/.omega/` directory
 2. Download the ONNX embedding model (~90 MB) to `~/.cache/omega/models/`
-3. Register `omega-memory` as an MCP server with Claude Code
+3. Register `omega-memory` as an MCP server (Claude Code auto-detected, or specify --client)
 4. Install session hooks into `~/.claude/settings.json`
 5. Add an OMEGA block to `~/.claude/CLAUDE.md`
 
