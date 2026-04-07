@@ -2,17 +2,17 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.omega-memory/omega-memory",
   "title": "OMEGA Memory",
-  "description": "Persistent memory, coordination, and learning for AI agents. Local-first, 25 MCP tools.",
+  "description": "Persistent semantic memory for AI coding agents. Local-first, 25 MCP tools. No cloud.",
   "repository": {
     "url": "https://github.com/omega-memory/omega-memory",
     "source": "github"
   },
-  "version": "1.3.0",
+  "version": "1.4.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "omega-memory",
-      "version": "1.3.0",
+      "version": "1.4.2",
       "transport": {
         "type": "stdio"
       }
