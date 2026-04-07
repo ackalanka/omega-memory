@@ -31,6 +31,6 @@ echo ""
 echo "Opening quickstart guide..."
 
 # Open quickstart guide in browser
-open "https://omegamax.co/quickstart?ref=installer-mac" 2>/dev/null || true
+open "https://omegamax.co/get-started?ref=installer-mac" 2>/dev/null || true
 
 exit 0
