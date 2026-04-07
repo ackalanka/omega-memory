@@ -1,14 +1,13 @@
 """
-OMEGA Telemetry -- anonymous, local-first usage tracking.
+Local-only usage tracking. No data is sent to any server.
 
-All data is stored locally in ~/.omega/telemetry.json. Network reporting
-is OPT-IN only, controlled by the OMEGA_TELEMETRY=1 environment variable.
+All data is stored locally in ~/.omega/telemetry.json for the CLI's own
+display (e.g. ``omega status`` memory count, session counts).
 
 No PII, no memory content, no file paths are ever collected. Only aggregate
-counts and system metadata.
+counts and system metadata, kept on disk for local reference.
 
-All telemetry operations are failure-safe (wrapped in try/except) and
-network calls are non-blocking (fire-and-forget in daemon threads).
+All telemetry operations are failure-safe (wrapped in try/except).
 
 Integration points (do not modify other files, wire these up separately):
   - handle_omega_welcome  -> track_event("session_start")
@@ -22,17 +21,13 @@ Integration points (do not modify other files, wire these up separately):
 import json
 import os
 import platform
-import sys
 import threading
-import time
-import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
 OMEGA_DIR = Path.home() / ".omega"
 TELEMETRY_FILE = OMEGA_DIR / "telemetry.json"
-TELEMETRY_ENDPOINT = "https://admin.omegamax.co/api/telemetry"
 
 _lock = threading.Lock()
 
@@ -68,7 +63,6 @@ def _default_data() -> dict:
             "upgrade_clicked": 0,
         },
         "last_active": now,
-        "last_reported": None,
     }
 
 
@@ -145,8 +139,6 @@ def track_event(event: str, metadata: dict | None = None) -> None:
                 )
 
             _save(data)
-
-        maybe_report()
     except Exception:
         pass
 
@@ -171,8 +163,6 @@ def track_tool_call(tool_name: str) -> None:
                 data["memories"]["stored_this_session"] += 1
 
             _save(data)
-
-        maybe_report()
     except Exception:
         pass
 
@@ -193,14 +183,12 @@ def track_nag(nag_type: str) -> None:
                 data["nag_events"][key] += 1
 
             _save(data)
-
-        maybe_report()
     except Exception:
         pass
 
 
 def get_summary() -> dict:
-    """Return telemetry summary for admin dashboard reporting."""
+    """Return telemetry summary for local display (e.g. ``omega status``)."""
     try:
         with _lock:
             data = _load()
@@ -217,71 +205,6 @@ def get_summary() -> dict:
             "tool_calls": data.get("tool_calls", {}),
             "nag_events": data.get("nag_events", {}),
             "last_active": data.get("last_active"),
-            "last_reported": data.get("last_reported"),
         }
     except Exception:
         return {}
-
-
-def maybe_report() -> None:
-    """If OMEGA_TELEMETRY=1 and last report was >24h ago, send summary to endpoint.
-
-    Runs in background thread. Fire-and-forget.
-    """
-    try:
-        if os.environ.get("OMEGA_TELEMETRY") != "1":
-            return
-
-        data = _load()
-        last_reported = data.get("last_reported")
-
-        if last_reported:
-            try:
-                last_ts = datetime.fromisoformat(last_reported)
-                now = datetime.now(timezone.utc)
-                elapsed = (now - last_ts).total_seconds()
-                if elapsed < 86400:  # 24 hours
-                    return
-            except Exception:
-                pass  # If parsing fails, allow reporting
-
-        t = threading.Thread(target=_do_report, args=(data,), daemon=True)
-        t.start()
-    except Exception:
-        pass
-
-
-def _do_report(data: dict) -> None:
-    """Actually send the report. Called in background thread."""
-    try:
-        payload = json.dumps(
-            {
-                "install_id": data.get("install_id"),
-                "os": data.get("os"),
-                "python_version": data.get("python_version"),
-                "omega_version": data.get("omega_version"),
-                "client": data.get("client"),
-                "pro_licensed": data.get("pro_licensed", False),
-                "sessions": data.get("sessions", {}),
-                "memories": data.get("memories", {}),
-                "tool_calls": data.get("tool_calls", {}),
-                "nag_events": data.get("nag_events", {}),
-                "last_active": data.get("last_active"),
-            }
-        ).encode("utf-8")
-
-        req = urllib.request.Request(
-            TELEMETRY_ENDPOINT,
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=5)
-
-        # Update last_reported on success
-        with _lock:
-            current = _load()
-            current["last_reported"] = datetime.now(timezone.utc).isoformat()
-            _save(current)
-    except Exception:
-        pass
