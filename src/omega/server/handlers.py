@@ -3157,7 +3157,7 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
         body += "\n"
         body += f"\n**Pro-only tools ({len(pro_lines)})** -- `omega upgrade` to unlock:\n"
         body += "\n".join(pro_lines)
-        body += f"\n\n-> Upgrade: https://omegamax.co/pro?ref=tools-list"
+        body += "\n\n-> Upgrade: https://omegamax.co/pro?ref=tools-list"
 
     return mcp_response(header + body + footer)
 

@@ -1306,9 +1306,9 @@ def cmd_status(args):
         try:
             from omega.license import is_pro
             if not is_pro():
-                print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
+                print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
         except Exception:
-            print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
+            print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
 
     if not use_json:
         _offer_email_capture()
@@ -2669,9 +2669,9 @@ def cmd_doctor(args):
         try:
             from omega.license import is_pro
             if not is_pro():
-                print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
+                print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
         except Exception:
-            print(f"\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
+            print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
 
     if not use_json:
         _offer_email_capture()
