@@ -1,6 +1,6 @@
 # OMEGA
 
-**AI agents that remember, coordinate, and learn. All on your machine.** Your agent's brain shouldn't live on someone else's server.
+**Cross-model memory for AI agents. Local-first. Works with Claude, GPT, Gemini, Cursor, Claw Code, and any MCP client.** Your agent's brain shouldn't live on someone else's server, or be locked to one provider.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
@@ -11,13 +11,14 @@
 
 ## The Problem
 
-AI coding agents are stateless. Every new session starts from zero. And the "solutions" want you to send your codebase context to their cloud.
+AI coding agents are stateless. Every new session starts from zero. The "solutions" either lock you into one model provider or send your codebase context to their cloud.
 
 - **Context loss.** Agents forget every decision, preference, and architectural choice between sessions. Developers spend 10-30 minutes per session re-explaining context that was already established.
 - **Repeated mistakes.** Without learning from past sessions, agents make the same errors over and over. They don't remember what worked, what failed, or why a particular approach was chosen.
 - **Cloud memory = someone else's database.** Services like Mem0 require API keys and send your data to their servers. When they change pricing, get acquired, or go down, your agent's accumulated intelligence disappears.
+- **Vendor lock-in.** Anthropic's Memory Tool only works with Claude. OpenAI's memory only works with GPT. Switch models, lose your memory.
 
-OMEGA solves this. Memory, coordination, and learning that runs entirely on your machine. No cloud. No API keys. No vendor lock-in.
+OMEGA solves this. Memory, coordination, and learning that runs entirely on your machine. Works with every major LLM and coding agent. No cloud. No API keys. No vendor lock-in.
 
 <!-- TODO: terminal GIF showing memory recall across sessions -->
 <!-- mcp-name: io.github.omega-memory/omega-memory -->
@@ -39,11 +40,11 @@ omega setup --client claude-desktop
 
 This registers OMEGA as an MCP server in Claude Desktop's config. Restart Claude Desktop to activate.
 
-### Cursor, Windsurf, Cline, Codex
+### Cursor, Claw Code, Windsurf, Cline, Codex
 
 ```bash
 pip install omega-memory[server]
-omega setup --client cursor      # or: windsurf, cline, codex
+omega setup --client cursor      # or: claw-code, windsurf, cline, codex
 ```
 
 <details>
@@ -125,25 +126,28 @@ That's it. Memories persist across sessions, accumulate over time, and are surfa
 
 ## How OMEGA Compares
 
-| Feature | OMEGA | Mem0 | Zep | Copilot Memory |
-|---------|:-----:|:----:|:---:|:--------------:|
-| Your data stays on your machine | Yes | No | No | No |
-| No API keys or cloud dependency | Yes | No | No | No |
-| Multi-agent coordination | Yes *(pro)* | No | No | Partial |
-| Graph memory included free | Yes | $249/mo | No | No |
-| LLM routing | Yes *(pro)* | No | No | No |
-| Document ingestion (RAG) | Yes *(pro)* | No | Yes | No |
-| Free & open source | Yes (Apache 2.0) | Freemium | Freemium | Bundled |
+| Feature | OMEGA | Anthropic Memory | Mem0 | Zep |
+|---------|:-----:|:----------------:|:----:|:---:|
+| Works with any LLM/agent | **Yes** | Claude only | Yes | Yes |
+| Your data stays on your machine | **Yes** | Partial* | No | No |
+| No cloud dependency | **Yes** | No (needs API) | No | No |
+| Semantic search + knowledge graph | **Yes** | No (file CRUD) | $249/mo | Yes |
+| Multi-agent coordination | **Yes** *(pro)* | Research preview | No | No |
+| Works with Claude Code, Cursor, Claw Code | **Yes** | Claude only | Partial | No |
+| Free & open source | **Yes** (Apache 2.0) | No | Freemium | Freemium |
+
+*Anthropic's Memory Tool stores data client-side but requires Claude API calls for all memory operations. OMEGA runs entirely on-device, including embeddings (ONNX).*
+
+**Anthropic Memory is for Anthropic. OMEGA is for everyone.**
 
 ## Architecture
 
 ```
-               ┌─────────────────────┐
-               │    Claude Code       │
-               │  (or any MCP host)   │
-               └──────────┬──────────┘
-                          │ stdio/MCP
-               ┌──────────▼──────────┐
+     Claude Code  ·  Cursor  ·  Claw Code  ·  Any MCP Client
+               │         │         │              │
+               └─────────┴─────┬───┴──────────────┘
+                               │ stdio/MCP
+               ┌───────────────▼─────────────┐
                │   OMEGA MCP Server   │
                │   25 core tools      │
                └──┬──────────────────┘
