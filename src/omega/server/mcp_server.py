@@ -66,7 +66,7 @@ import importlib
 # Check Pro license before loading commercial modules
 _pro_licensed = False
 try:
-    from omega.license import is_pro
+    from omega_platform.license import is_pro
     _pro_licensed = is_pro()
 except Exception as e:
     logging.getLogger("omega.mcp_server").debug("License check failed, defaulting to non-pro: %s", e)

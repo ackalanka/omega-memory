@@ -64,7 +64,7 @@ def _is_coord_status_checked(session_id: str | None = None, max_age_sec: int = 1
 def _is_pro_available() -> bool:
     """Check if pro modules are available."""
     try:
-        from omega.license import is_pro
+        from omega_platform.license import is_pro
         return is_pro()
     except Exception:
         return False

@@ -1130,7 +1130,7 @@ def cmd_setup(args):
         # Pro upgrade CTA on first install (skip if already licensed)
         _show_pro = True
         try:
-            from omega.license import is_pro
+            from omega_platform.license import is_pro
             if is_pro():
                 _show_pro = False
         except Exception:
@@ -1304,7 +1304,7 @@ def cmd_status(args):
     # Pro upgrade nudge for free users
     if not use_json:
         try:
-            from omega.license import is_pro
+            from omega_platform.license import is_pro
             if not is_pro():
                 print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
         except Exception:
@@ -2667,7 +2667,7 @@ def cmd_doctor(args):
     # Pro upgrade nudge for free users
     if not use_json:
         try:
-            from omega.license import is_pro
+            from omega_platform.license import is_pro
             if not is_pro():
                 print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-doctor")
         except Exception:
@@ -2960,15 +2960,26 @@ def cmd_upgrade(args):
 
 def cmd_activate(args):
     """Activate a Pro license key."""
-    try:
-        from omega.license import activate
-    except ImportError:
-        print("License activation requires omega-pro.")
-        sys.exit(1)
     key = args.key.strip()
 
     if not key.startswith("OMEGA-PRO-"):
         print("Invalid key format. Keys start with OMEGA-PRO-")
+        sys.exit(1)
+
+    try:
+        from omega_platform.license import activate
+    except ImportError:
+        print("OMEGA Pro is not installed in this environment.")
+        print()
+        print("Your license key is valid, but activation also requires the Pro")
+        print("wheel (omega_memory_pro-*.whl) in the same Python environment as")
+        print("omega-memory. Email hello@omegamax.co with this key and we will")
+        print("send you the wheel and the exact install commands:")
+        print()
+        print(f"  {key}")
+        print()
+        print("Once the wheel is installed, re-run:")
+        print(f"  omega activate {key}")
         sys.exit(1)
 
     print("Activating license key...")
@@ -2977,16 +2988,20 @@ def cmd_activate(args):
         print("\nRestart Claude Code or your MCP client to load 48 additional tools.")
     else:
         print("Activation failed. Please check your key and try again.")
-        print("If the problem persists, contact omega-memory@proton.me")
+        print("If the problem persists, contact hello@omegamax.co")
         sys.exit(1)
 
 
 def cmd_license(args):
     """Show current license status."""
     try:
-        from omega.license import license_status, deactivate
+        from omega_platform.license import license_status, deactivate
     except ImportError:
-        print("License management requires omega-pro.")
+        print("OMEGA Pro is not installed in this environment.")
+        print()
+        print("The Pro wheel (omega_memory_pro-*.whl) is not installed, so there")
+        print("is no license to manage. Email hello@omegamax.co with your license")
+        print("key and we will send you the wheel and install instructions.")
         return
 
     if getattr(args, "deactivate", False):
