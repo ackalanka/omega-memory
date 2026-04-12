@@ -151,12 +151,12 @@ def print_stats_card(data: Dict[str, Any]) -> None:
             f"  [cyan]Connections:[/cyan]       [bold]{edge_count:>8}[/bold]",
             f"  [cyan]Active since:[/cyan]  [bold]{active_since:>12}[/bold]",
             "",
-            "[dim]github.com/omega-memory/omega-memory[/dim]",
+            "[yellow]Star us on GitHub:[/yellow] [link=https://github.com/omega-memory/omega-memory]github.com/omega-memory/omega-memory[/link]",
             "",
         ]
         console.print(Panel("\n".join(lines), border_style="cyan", expand=False, padding=(0, 2)))
     else:
-        w = 41
+        w = 45
         print("+" + "-" * w + "+")
         print("|" + "OMEGA -- Your Agent's Memory".center(w) + "|")
         print("|" + " " * w + "|")
@@ -166,7 +166,7 @@ def print_stats_card(data: Dict[str, Any]) -> None:
         print("|" + f"  Connections:       {edge_count:>8}".ljust(w) + "|")
         print("|" + f"  Active since:  {active_since:>12}".ljust(w) + "|")
         print("|" + " " * w + "|")
-        print("|" + "github.com/omega-memory/omega-memory".center(w) + "|")
+        print("|" + "Star us: github.com/omega-memory/omega-memory".center(w) + "|")
         print("+" + "-" * w + "+")
 
 

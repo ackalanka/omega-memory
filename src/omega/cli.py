@@ -1135,20 +1135,25 @@ def cmd_setup(args):
                 _show_pro = False
         except Exception:
             pass
+        # GitHub star ask -- always show on first setup
+        print()
+        print("  If OMEGA is useful, please star us on GitHub:")
+        print("    https://github.com/omega-memory/omega-memory")
+
         if _show_pro:
             print()
-            print("  ┌─────────────────────────────────────────────────┐")
-            print("  │  Unlock the full platform with OMEGA Pro        │")
-            print("  │                                                 │")
-            print("  │  + 98 Pro tools: coordination, LLM routing,     │")
-            print("  │    knowledge base, entity management, oracle    │")
-            print("  │  + Multi-agent coordination (53 tools)          │")
-            print("  │  + Cloud sync via your own Supabase             │")
-            print("  │                                                 │")
-            print("  │  $19/mo  ·  14-day money-back guarantee         │")
-            print("  │  Run: omega upgrade                             │")
-            print("  │  Or visit: https://omegamax.co/pro?ref=cli-setup │")
-            print("  └─────────────────────────────────────────────────┘")
+            print("  ┌─────────────────────────────────────────────────────┐")
+            print("  │  Unlock the full platform with OMEGA Pro            │")
+            print("  │                                                     │")
+            print("  │  + 98 Pro tools: coordination, LLM routing,         │")
+            print("  │    knowledge base, entity management, oracle        │")
+            print("  │  + Multi-agent coordination (53 tools)              │")
+            print("  │  + Cloud sync via your own Supabase                 │")
+            print("  │                                                     │")
+            print("  │  $19/mo  ·  14-day money-back guarantee             │")
+            print("  │  Run: omega upgrade                                 │")
+            print("  │  Or visit: https://omegamax.co/pro?ref=cli-setup    │")
+            print("  └─────────────────────────────────────────────────────┘")
 
 
 def cmd_status(args):
@@ -1303,12 +1308,18 @@ def cmd_status(args):
 
     # Pro upgrade nudge for free users
     if not use_json:
+        pro_licensed = False
         try:
             from omega_platform.license import is_pro
-            if not is_pro():
-                print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
+            pro_licensed = is_pro()
         except Exception:
-            print("\n  Upgrade to Pro: 98 more tools. Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
+            pass
+        if not pro_licensed:
+            mem_count = data.get("memories", 0)
+            if mem_count >= 1500:
+                print(f"\n  You have {mem_count:,} memories (limit: 2,000). Pro removes limits.")
+            print("  Pro: coordination, routing, knowledge base, and 95 more tools. $19/mo")
+            print("  Run 'omega upgrade' or visit https://omegamax.co/pro?ref=cli-status")
 
     if not use_json:
         _offer_email_capture()
@@ -3091,6 +3102,7 @@ def main():
     parser = argparse.ArgumentParser(
         prog="omega",
         description="OMEGA — Persistent memory for AI coding agents",
+        epilog="Pro: 98 more tools (coordination, routing, knowledge base). Run 'omega upgrade' for details.",
     )
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 

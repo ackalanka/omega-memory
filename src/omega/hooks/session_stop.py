@@ -195,6 +195,48 @@ def _print_activity_report(session_id: str):
     except Exception:
         pass
 
+    # Pro upgrade nudge -- frequency scales with memory count (closer to limit = more frequent)
+    try:
+        pro_licensed = False
+        try:
+            from omega_platform.license import is_pro
+            pro_licensed = is_pro()
+        except Exception:
+            pass
+        if not pro_licensed:
+            mem_count = 0
+            try:
+                from omega.bridge import _get_store
+                _s = _get_store()
+                mem_count = _s.node_count() if hasattr(_s, 'node_count') else 0
+            except Exception:
+                pass
+
+            from omega.telemetry import _load as _telem_load
+            tdata = _telem_load()
+            session_total = tdata.get("sessions", {}).get("total", 0)
+
+            # Graduated urgency: more memories = more frequent nudge
+            show = False
+            if mem_count >= 1800:
+                show = True  # every session
+                print(f"  {mem_count:,}/2,000 memories -- approaching free tier limit")
+                print(f"  Search quality degrades at 2,000. Run 'omega upgrade' for unlimited.")
+            elif mem_count >= 1500:
+                show = session_total % 3 == 0  # every 3rd session
+                if show:
+                    print(f"  {mem_count:,}/2,000 memories (75%). Pro removes limits. Run 'omega upgrade'")
+            elif mem_count >= 1000:
+                show = session_total % 5 == 0  # every 5th session
+                if show:
+                    print(f"  {mem_count:,}/2,000 memories. Pro: unlimited + coordination + routing. Run 'omega upgrade'")
+            elif mem_count >= 500:
+                show = session_total % 10 == 0  # every 10th session
+                if show:
+                    print(f"  Pro: coordination, routing, and 96 more tools. Run 'omega upgrade'")
+    except Exception:
+        pass
+
 
 def _build_summary(session_id: str, project: str) -> str:
     """Build a session summary from per-type targeted queries.

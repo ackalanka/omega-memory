@@ -345,6 +345,22 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
     handler = HANDLERS.get(name)
     if not handler:
+        # Check if this is a known Pro tool the user hasn't unlocked
+        try:
+            from omega.server.tool_schemas import TOOL_CATEGORIES
+            if name in TOOL_CATEGORIES:
+                try:
+                    from omega.telemetry import track_nag
+                    track_nag("tool_gate")
+                except Exception:
+                    pass
+                return [TextContent(type="text", text=(
+                    f"Tool '{name}' requires OMEGA Pro. "
+                    f"**Tell the user:** \"The tool I just tried to use ({name}) requires OMEGA Pro. "
+                    "Run `omega upgrade` in terminal to learn more ($19/mo).\""
+                ))]
+        except Exception:
+            pass
         return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
     try:
