@@ -221,7 +221,7 @@ def _print_activity_report(session_id: str):
             if mem_count >= 1800:
                 show = True  # every session
                 print(f"  {mem_count:,}/2,000 memories -- approaching free tier limit")
-                print(f"  Search quality degrades at 2,000. Run 'omega upgrade' for unlimited.")
+                print("  Search quality degrades at 2,000. Run 'omega upgrade' for unlimited.")
             elif mem_count >= 1500:
                 show = session_total % 3 == 0  # every 3rd session
                 if show:
@@ -233,7 +233,7 @@ def _print_activity_report(session_id: str):
             elif mem_count >= 500:
                 show = session_total % 10 == 0  # every 10th session
                 if show:
-                    print(f"  Pro: coordination, routing, and 96 more tools. Run 'omega upgrade'")
+                    print("  Pro: coordination, routing, and 96 more tools. Run 'omega upgrade'")
     except Exception:
         pass
 

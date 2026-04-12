@@ -7,12 +7,12 @@
     "url": "https://github.com/omega-memory/omega-memory",
     "source": "github"
   },
-  "version": "1.4.2",
+  "version": "1.4.5",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "omega-memory",
-      "version": "1.4.2",
+      "version": "1.4.5",
       "transport": {
         "type": "stdio"
       }
