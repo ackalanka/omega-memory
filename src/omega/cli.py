@@ -2969,6 +2969,180 @@ def cmd_upgrade(args):
     webbrowser.open(url)
 
 
+def _activate_license(key: str) -> bool:
+    """Activate a Pro license key against the server API.
+
+    Self-contained: uses only stdlib so activation works from the public
+    omega-memory package without requiring the Pro wheel.
+    """
+    import json as _json
+    import socket
+    import urllib.error
+    import urllib.request
+
+    activate_url = "https://admin.omegamax.co/api/activate"
+    cache_days = 7
+    timeout = min(int(os.environ.get("OMEGA_LICENSE_TIMEOUT", "30")), 120)
+
+    data = _json.dumps({"key": key}).encode()
+    req = urllib.request.Request(
+        activate_url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            result = _json.loads(resp.read().decode())
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print("License key not found. Double-check you copied the full key.")
+        elif e.code == 403:
+            print("This license is not active. It may have been cancelled.")
+        elif e.code in (500, 502, 503, 504):
+            print(f"Activation server error (HTTP {e.code}). Please try again shortly.")
+        else:
+            print(f"Unexpected HTTP error (HTTP {e.code}).")
+        print("Contact hello@omegamax.co if this persists.")
+        return False
+    except urllib.error.URLError as e:
+        print("Could not reach the activation server. Check your internet connection.")
+        print(f"Detail: {e.reason}")
+        return False
+    except socket.timeout:
+        print(f"Activation request timed out after {timeout}s. Try again.")
+        return False
+    except _json.JSONDecodeError:
+        print("Activation server returned a malformed response. Contact hello@omegamax.co.")
+        return False
+    except Exception as e:
+        print(f"Unexpected error: {type(e).__name__}: {e}")
+        print("Contact hello@omegamax.co with this message.")
+        return False
+
+    if not result.get("valid"):
+        reason = result.get("reason", "No reason given")
+        print(f"Activation rejected: {reason}")
+        return False
+
+    # Parse expiry
+    expires_at_str = result.get("expires_at", "")
+    try:
+        dt = datetime.fromisoformat(expires_at_str.replace("Z", "+00:00"))
+        valid_until = dt.timestamp()
+    except (ValueError, AttributeError):
+        valid_until = time.time() + (cache_days * 86400)
+
+    # Write license file
+    omega_dir = Path.home() / ".omega"
+    license_file = omega_dir / "license.json"
+    try:
+        omega_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        print(f"Could not create {omega_dir}: {e}")
+        return False
+
+    license_data: dict = {
+        "key": key,
+        "valid_until": valid_until,
+        "activated_at": time.time(),
+    }
+    signature = result.get("signature")
+    if signature:
+        license_data["signature"] = signature
+
+    try:
+        license_file.write_text(_json.dumps(license_data))
+        license_file.chmod(0o600)
+    except OSError as e:
+        print(f"Could not write license file at {license_file}: {e}")
+        return False
+
+    return True
+
+
+def _download_and_install_pro_wheel(key: str) -> bool:
+    """Download the Pro wheel from the server and pip-install it.
+
+    Uses the branded download endpoint which authenticates via license key,
+    so no browser session or dashboard login required.
+    Returns True if the wheel was installed successfully.
+    """
+    import tempfile
+    import urllib.error
+    import urllib.request
+
+    wheel_url = f"https://admin.omegamax.co/api/pro/download-wheel?key={key}"
+    timeout = min(int(os.environ.get("OMEGA_LICENSE_TIMEOUT", "60")), 120)
+
+    # Download the wheel
+    try:
+        req = urllib.request.Request(wheel_url)
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            # Extract filename from Content-Disposition header
+            cd = resp.headers.get("Content-Disposition", "")
+            filename = "omega_memory_pro.whl"
+            if "filename=" in cd:
+                # Parse filename="omega_memory_pro-1.4.0-py3-none-any.whl"
+                parts = cd.split("filename=")[-1].strip().strip('"').strip("'")
+                if parts:
+                    filename = parts
+
+            wheel_bytes = resp.read()
+    except urllib.error.HTTPError as e:
+        if e.code == 503:
+            print("  Pro wheel is not yet published. Contact hello@omegamax.co.")
+        elif e.code in (403, 404):
+            print("  Could not download Pro wheel. Contact hello@omegamax.co.")
+        else:
+            print(f"  Download failed (HTTP {e.code}). Contact hello@omegamax.co.")
+        return False
+    except Exception as e:
+        print(f"  Download failed: {e}")
+        return False
+
+    # Save to temp file and pip install
+    tmp_dir = tempfile.mkdtemp(prefix="omega_pro_")
+    wheel_path = Path(tmp_dir) / filename
+    installed = False
+    try:
+        wheel_path.write_bytes(wheel_bytes)
+
+        # Use the same Python that's running this CLI (ensures same environment)
+        result = subprocess.run(
+            [sys.executable, "-m", "pip", "install", str(wheel_path), "--quiet"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        if result.returncode != 0:
+            stderr = result.stderr.strip()
+            print(f"  pip install failed: {stderr}")
+            print(f"  Wheel saved to: {wheel_path}")
+            print(f"  Try manually: pip install {wheel_path}")
+            return False
+
+        installed = True
+        return True
+    except subprocess.TimeoutExpired:
+        print(f"  pip install timed out. Try manually: pip install {wheel_path}")
+        return False
+    except Exception as e:
+        print(f"  Install failed: {e}")
+        print(f"  Wheel saved to: {wheel_path}")
+        print(f"  Try manually: pip install {wheel_path}")
+        return False
+    finally:
+        # Clean up temp file only on success; keep it on failure for manual install
+        if installed:
+            try:
+                wheel_path.unlink(missing_ok=True)
+                Path(tmp_dir).rmdir()
+            except OSError:
+                pass
+
+
 def cmd_activate(args):
     """Activate a Pro license key."""
     key = args.key.strip()
@@ -2977,62 +3151,133 @@ def cmd_activate(args):
         print("Invalid key format. Keys start with OMEGA-PRO-")
         sys.exit(1)
 
+    # If omega_platform is already installed, use its richer activate() with
+    # Ed25519 verification, clock-skew detection, and detailed diagnostics.
     try:
         from omega_platform.license import activate
+        print("Activating license key...")
+        if activate(key):
+            print("License activated successfully! Pro modules will load on next MCP server start.")
+            print("\nRestart Claude Code or your MCP client to load Pro tools.")
+        else:
+            print("Activation failed. Please check your key and try again.")
+            print("If the problem persists, contact hello@omegamax.co")
+            sys.exit(1)
+        return
     except ImportError:
-        print("OMEGA Pro is not installed in this environment.")
-        print()
-        print("Your license key is valid, but activation also requires the Pro")
-        print("wheel (omega_memory_pro-*.whl) in the same Python environment as")
-        print("omega-memory. Email hello@omegamax.co with this key and we will")
-        print("send you the wheel and the exact install commands:")
-        print()
-        print(f"  {key}")
-        print()
-        print("Once the wheel is installed, re-run:")
-        print(f"  omega activate {key}")
+        pass
+
+    # Standalone path: validate key, cache license, download + install Pro wheel.
+    print("Activating license key...")
+    if not _activate_license(key):
         sys.exit(1)
 
-    print("Activating license key...")
-    if activate(key):
-        print("License activated successfully! Pro modules will load on next MCP server start.")
-        print("\nRestart Claude Code or your MCP client to load 48 additional tools.")
+    print("  License validated.")
+    print("  Downloading Pro package...")
+
+    if _download_and_install_pro_wheel(key):
+        print("  Pro package installed.")
+        print()
+        print("  Pro license activated! 69 Pro tools now available.")
+        print()
+        print("  Next steps:")
+        print("    omega doctor                         # Verify installation")
+        print("    omega status                         # Check Pro features")
+        print()
+        print("  Restart Claude Code or your MCP client to load Pro tools.")
     else:
-        print("Activation failed. Please check your key and try again.")
-        print("If the problem persists, contact hello@omegamax.co")
-        sys.exit(1)
+        print()
+        print("  License activated, but Pro package could not be installed automatically.")
+        print("  Download it manually from your dashboard:")
+        print()
+        print("    https://omegamax.co/pro/dashboard")
+        print()
+        print("  Then install:")
+        print("    pip install ~/Downloads/omega_memory_pro-*.whl")
+        print()
+        print("  After installing, restart Claude Code or your MCP client.")
 
 
 def cmd_license(args):
     """Show current license status."""
+    # If omega_platform is available, use its richer implementation.
     try:
         from omega_platform.license import license_status, deactivate
-    except ImportError:
-        print("OMEGA Pro is not installed in this environment.")
-        print()
-        print("The Pro wheel (omega_memory_pro-*.whl) is not installed, so there")
-        print("is no license to manage. Email hello@omegamax.co with your license")
-        print("key and we will send you the wheel and install instructions.")
+
+        if getattr(args, "deactivate", False):
+            deactivate()
+            print("License removed.")
+            return
+
+        status = license_status()
+        if status["active"]:
+            print("Status:      Active")
+            print(f"Key:         {status['key']}")
+            print(f"Valid until:  {status['valid_until']}")
+        else:
+            if status["key"]:
+                print("Status:      Expired")
+                print(f"Key:         {status['key']}")
+                print("\nRun 'omega activate <key>' to reactivate.")
+            else:
+                print("Status:      No license")
+                print("\nUpgrade at https://omegamax.co/pro")
         return
+    except ImportError:
+        pass
+
+    # Standalone: read the license file directly.
+    license_file = Path.home() / ".omega" / "license.json"
 
     if getattr(args, "deactivate", False):
-        deactivate()
+        try:
+            license_file.unlink(missing_ok=True)
+        except OSError:
+            pass
         print("License removed.")
         return
 
-    status = license_status()
-    if status["active"]:
-        print("Status:      Active")
-        print(f"Key:         {status['key']}")
-        print(f"Valid until:  {status['valid_until']}")
+    if not license_file.exists():
+        print("Status:      No license")
+        print("\nActivate with: omega activate <your-license-key>")
+        print("Purchase at: https://omegamax.co/pro")
+        return
+
+    try:
+        data = json.loads(license_file.read_text())
+    except (json.JSONDecodeError, OSError):
+        print("Status:      License file corrupt")
+        print(f"\nRemove and re-activate:\n  rm {license_file}\n  omega activate <your-key>")
+        return
+
+    key = data.get("key", "unknown")
+    valid_until = data.get("valid_until", 0)
+    now = time.time()
+
+    # Mask key for display
+    if len(key) > 20:
+        masked = key[:14] + "..." + key[-4:]
     else:
-        if status["key"]:
-            print("Status:      Expired")
-            print(f"Key:         {status['key']}")
-            print("\nRun 'omega activate <key>' to reactivate, or resubscribe at https://omegamemory.com/pro")
-        else:
-            print("Status:      No license")
-            print("\nUpgrade at https://omegamemory.com/pro")
+        masked = key
+
+    if valid_until > now:
+        valid_dt = datetime.fromtimestamp(valid_until, tz=timezone.utc).isoformat()
+        print("Status:      Active")
+        print(f"Key:         {masked}")
+        print(f"Valid until:  {valid_dt}")
+        pro_installed = False
+        try:
+            import omega_platform  # noqa: F401
+            pro_installed = True
+        except ImportError:
+            pass
+        if not pro_installed:
+            print("\nPro wheel not installed. Download from https://omegamax.co/pro/dashboard")
+            print("Then: pip install ~/Downloads/omega_memory_pro-*.whl")
+    else:
+        print("Status:      Expired")
+        print(f"Key:         {masked}")
+        print("\nRun 'omega activate <key>' to reactivate.")
 
 
 def cmd_export_obsidian(args):
