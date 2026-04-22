@@ -116,7 +116,7 @@ Watch memoryarena.github.io for public release.
 ## 7. Notes
 
 - **MemoryArena code/data**: NOT public yet. Website says "coming soon." Watch memoryarena.github.io.
-- **Awesome-AI-Memory repo**: DO NOT interact until Jason briefs (received email from maintainers).
+- **Awesome-AI-Memory repo**: Awaiting response from maintainers before interacting.
 - **Hindsight code**: Public at github.com/vectorize-io/hindsight. MCP server. Worth exploring as reference implementation.
 
 ---

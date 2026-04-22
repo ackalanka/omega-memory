@@ -25,14 +25,26 @@ def _resolve_python() -> str:
 _PYTHON = _resolve_python()
 
 # Project test configs: directory prefix -> (test command, cwd)
-# Built-in default: OMEGA (this project itself)
-_DEFAULT_PROJECTS = {
-    os.path.expanduser("~/Projects/omega/"): {
-        "cmd": [_PYTHON, "-m", "pytest", "tests/", "-x", "-q", "--tb=short", "--no-header"],
-        "cwd": os.path.expanduser("~/Projects/omega"),
-        "name": "OMEGA",
-    },
-}
+# Auto-detect: if this hook file lives inside an OMEGA checkout, use that as the default project.
+# Otherwise, no built-in defaults (user configures via ~/.omega/post_edit_projects.json).
+def _detect_default_projects():
+    """Detect projects from the location of this hook file."""
+    projects = {}
+    # If this file is inside an omega source tree, register it
+    hook_dir = os.path.dirname(os.path.abspath(__file__))
+    # hooks/ lives under src/omega/hooks/ -- walk up to find repo root
+    candidate = os.path.normpath(os.path.join(hook_dir, "..", "..", "..", ".."))
+    if os.path.isfile(os.path.join(candidate, "pyproject.toml")):
+        prefix = candidate.rstrip("/") + "/"
+        projects[prefix] = {
+            "cmd": [_PYTHON, "-m", "pytest", "tests/", "-x", "-q", "--tb=short", "--no-header"],
+            "cwd": candidate,
+            "name": "OMEGA",
+        }
+    return projects
+
+
+_DEFAULT_PROJECTS = _detect_default_projects()
 
 
 def _load_projects():

@@ -534,7 +534,7 @@ class TestSplitAtomicFacts:
         assert len(_split_atomic_facts(content, "decision")) >= 1
 
     def test_user_fact_type_works(self):
-        content = "My name is Jason and I live in Singapore. Our company was founded in 2020."
+        content = "My name is Alex and I live in Berlin. Our company was founded in 2020."
         assert len(_split_atomic_facts(content, "user_fact")) >= 1
 
     def test_mixed_qualifying_and_non(self):

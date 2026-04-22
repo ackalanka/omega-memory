@@ -57,7 +57,7 @@ class TestFindContradictions:
     def test_single_memory(self, store):
         from omega.reflect import find_contradictions
 
-        _store_memory(store, "Jason prefers dark mode")
+        _store_memory(store, "Alex prefers dark mode")
         result = find_contradictions(store, "dark mode")
         assert result["memories_analyzed"] <= 1
         assert result["contradictions"] == []
@@ -65,8 +65,8 @@ class TestFindContradictions:
     def test_detects_known_contradiction(self, store):
         from omega.reflect import find_contradictions
 
-        _store_memory(store, "Jason prefers dark mode for all editors")
-        _store_memory(store, "Jason prefers light mode for all editors")
+        _store_memory(store, "Alex prefers dark mode for all editors")
+        _store_memory(store, "Alex prefers light mode for all editors")
         result = find_contradictions(store, "mode editors")
         # Should find at least one contradiction (antonym: dark vs light)
         if result["memories_analyzed"] >= 2:

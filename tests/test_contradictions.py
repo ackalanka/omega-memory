@@ -30,18 +30,18 @@ class TestNegationDetection:
     """Test negation asymmetry signal."""
 
     def test_one_negated_one_not(self):
-        """'Jason likes X' vs 'Jason does not like X' should score high."""
+        """'Alex likes X' vs 'Alex does not like X' should score high."""
         score = _check_negation_asymmetry(
-            "jason likes python", {"jason", "likes", "python"},
-            "jason does not like python", {"jason", "does", "not", "like", "python"},
+            "alex likes python", {"alex", "likes", "python"},
+            "alex does not like python", {"alex", "does", "not", "like", "python"},
         )
         assert score >= 0.5
 
     def test_neither_negated(self):
         """Two affirmative statements should score 0."""
         score = _check_negation_asymmetry(
-            "jason likes python", {"jason", "likes", "python"},
-            "jason likes javascript", {"jason", "likes", "javascript"},
+            "alex likes python", {"alex", "likes", "python"},
+            "alex likes javascript", {"alex", "likes", "javascript"},
         )
         assert score == 0.0
 
@@ -114,16 +114,16 @@ class TestPreferenceChange:
     def test_different_preference_values(self):
         """'prefers vim' vs 'prefers vscode' should detect change."""
         score = _check_preference_change(
-            "jason prefers vim for editing",
-            "jason prefers vscode for editing",
+            "alex prefers vim for editing",
+            "alex prefers vscode for editing",
         )
         assert score >= 0.5
 
     def test_same_preference(self):
         """Same preference value should score 0."""
         score = _check_preference_change(
-            "jason prefers vim",
-            "jason prefers vim for everything",
+            "alex prefers vim",
+            "alex prefers vim for everything",
         )
         assert score == 0.0
 
@@ -193,9 +193,9 @@ class TestDetectContradictions:
     def test_clear_contradiction(self):
         """Opposite statements should be detected."""
         results = detect_contradictions(
-            "Jason prefers dark mode",
+            "Alex prefers dark mode",
             [
-                "Jason prefers light mode",
+                "Alex prefers light mode",
                 "The weather is sunny today",
                 "Python is a programming language",
             ],
@@ -237,8 +237,8 @@ class TestDetectContradictions:
     def test_precomputed_similarity(self):
         """Pre-computed similarity scores should be used when provided."""
         results = detect_contradictions(
-            "Jason prefers dark mode",
-            ["Jason prefers light mode"],
+            "Alex prefers dark mode",
+            ["Alex prefers light mode"],
             similarity_scores=[5.0],  # High raw similarity
             contradiction_threshold=0.1,
         )

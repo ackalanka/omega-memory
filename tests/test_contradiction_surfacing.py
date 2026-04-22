@@ -105,7 +105,7 @@ class TestCheckContradictionsReturnType:
         """When no similar memories exist, returns []."""
         store = _make_store(tmp_omega_dir)
         # Store a memory first to have a node_id
-        node_id = store.store(content="Jason prefers dark mode in all editors", session_id="s1")
+        node_id = store.store(content="Alex prefers dark mode in all editors", session_id="s1")
 
         # Call _check_contradictions with a dummy embedding
         # Since there's only one memory, there are no candidates to contradict
@@ -124,7 +124,7 @@ class TestCheckContradictionsReturnType:
                 "node_id": "mem-abc123def456",
                 "confidence": 0.85,
                 "reason": "negation detected (one affirms, the other denies)",
-                "content_preview": "Jason prefers light mode",
+                "content_preview": "Alex prefers light mode",
             }
         ]
         store._last_contradiction_results = fake_results
@@ -149,14 +149,14 @@ class TestCheckContradictionsReturnType:
 
         # Store two contradictory memories
         node1 = store.store(
-            content="Jason prefers light mode for all code editors and IDEs",
+            content="Alex prefers light mode for all code editors and IDEs",
             session_id="s1",
             metadata={"event_type": "user_preference"},
         )
 
         # Store a contradictory memory
         node2 = store.store(
-            content="Jason prefers dark mode for all code editors and IDEs",
+            content="Alex prefers dark mode for all code editors and IDEs",
             session_id="s1",
             metadata={"event_type": "user_preference"},
         )
@@ -189,7 +189,7 @@ class TestBridgeContradictionSurfacing:
                 "node_id": "mem-abc123def456",
                 "confidence": 0.85,
                 "reason": "negation detected (one affirms, the other denies)",
-                "content_preview": "Jason prefers light mode",
+                "content_preview": "Alex prefers light mode",
             }
         ]
 
@@ -206,7 +206,7 @@ class TestBridgeContradictionSurfacing:
         store.get_last_contradiction_results = mock_get
 
         result = auto_capture(
-            content="Jason now prefers dark mode for all editors and terminals and IDEs",
+            content="Alex now prefers dark mode for all editors and terminals and IDEs",
             event_type="user_preference",
             session_id="test-session",
         )
@@ -265,7 +265,7 @@ class TestBridgeContradictionSurfacing:
         store.get_last_contradiction_results = mock_get
 
         result = auto_capture(
-            content="Jason switched to using dark mode everywhere across all applications",
+            content="Alex switched to using dark mode everywhere across all applications",
             event_type="user_preference",
             session_id="test-session",
         )

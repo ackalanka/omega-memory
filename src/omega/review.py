@@ -33,7 +33,7 @@ def run_review(
         return (
             "# Review Unavailable\n\n"
             "The `revue` package is not installed. Install it:\n"
-            "```\npip install -e ~/Projects/revue\n```"
+            "```\npip install revue\n```"
         )
 
     # Get OMEGA memory context for the review

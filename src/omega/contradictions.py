@@ -15,7 +15,7 @@ tuned for the pre-storage fast path (Phase 2.5).
 
 Usage:
     from omega.contradictions import detect_contradictions
-    results = detect_contradictions("Jason prefers light mode", candidates)
+    results = detect_contradictions("Alex prefers light mode", candidates)
 
 See also:
 - conflicts.py — pre-storage conflict gate with auto-resolve side effects (Phase 2.5)

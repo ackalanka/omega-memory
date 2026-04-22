@@ -3065,20 +3065,29 @@ def _activate_license(key: str) -> bool:
 def _download_and_install_pro_wheel(key: str) -> bool:
     """Download the Pro wheel from the server and pip-install it.
 
-    Uses the branded download endpoint which authenticates via license key,
-    so no browser session or dashboard login required.
+    Uses a POST request with the license key in the body (not URL) to avoid
+    leaking credentials in server logs. Verifies download integrity via
+    SHA256 hash returned by the server.
     Returns True if the wheel was installed successfully.
     """
+    import hashlib
+    import json as _json
     import tempfile
     import urllib.error
     import urllib.request
 
-    wheel_url = f"https://admin.omegamax.co/api/pro/download-wheel?key={key}"
+    wheel_url = "https://admin.omegamax.co/api/pro/download-wheel"
     timeout = min(int(os.environ.get("OMEGA_LICENSE_TIMEOUT", "60")), 120)
 
-    # Download the wheel
+    # Download the wheel (key in POST body, not URL query string)
     try:
-        req = urllib.request.Request(wheel_url)
+        data = _json.dumps({"key": key}).encode()
+        req = urllib.request.Request(
+            wheel_url,
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             # Extract filename from Content-Disposition header
             cd = resp.headers.get("Content-Disposition", "")
@@ -3088,6 +3097,9 @@ def _download_and_install_pro_wheel(key: str) -> bool:
                 parts = cd.split("filename=")[-1].strip().strip('"').strip("'")
                 if parts:
                     filename = parts
+
+            # Server provides SHA256 hash for integrity verification
+            expected_hash = resp.headers.get("X-Content-SHA256", "")
 
             wheel_bytes = resp.read()
     except urllib.error.HTTPError as e:
@@ -3101,6 +3113,14 @@ def _download_and_install_pro_wheel(key: str) -> bool:
     except Exception as e:
         print(f"  Download failed: {e}")
         return False
+
+    # Verify integrity if server provided a hash
+    if expected_hash:
+        actual_hash = hashlib.sha256(wheel_bytes).hexdigest()
+        if actual_hash != expected_hash:
+            print("  ERROR: Wheel integrity check failed (SHA256 mismatch).")
+            print("  The download may have been tampered with. Aborting.")
+            return False
 
     # Save to temp file and pip install
     tmp_dir = tempfile.mkdtemp(prefix="omega_pro_")

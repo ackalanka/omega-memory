@@ -141,7 +141,7 @@ Ranked by impact-to-effort ratio, synthesized across all 5 research tracks.
 
 **Source:** LangMem, MemOS (tool memory), Hindsight (CARA dispositions)
 
-**What:** A dedicated memory type for learned behavioral patterns and rules that automatically modify the agent's operating instructions. Example: "When Jason asks about deployment, always check Vercel status first" learned from repeated patterns.
+**What:** A dedicated memory type for learned behavioral patterns and rules that automatically modify the agent's operating instructions. Example: "When the user asks about deployment, always check Vercel status first" learned from repeated patterns.
 
 **Why:** No MCP memory system has this. OMEGA's `omega_lessons` stores insights but they don't automatically modify agent behavior. Procedural memory that feeds into `omega_protocol` would be a genuine innovation.
 

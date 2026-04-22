@@ -410,23 +410,20 @@ def _capture_usage_to_supabase(session_id: str, project_dir: str):
             if not session_id.startswith("agent-"):
                 return
 
-        # Load Supabase credentials
+        # Load Supabase credentials from env vars or ~/.omega/secrets.json
         sb_url = os.environ.get("SUPABASE_URL", "")
         sb_key = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
         if not sb_url or not sb_key:
-            env_file = Path.home() / "Projects" / "omega" / "website" / ".env.local"
-            if env_file.exists():
-                for line in env_file.read_text().splitlines():
-                    line = line.strip()
-                    if not line or line.startswith("#") or "=" not in line:
-                        continue
-                    k, _, v = line.partition("=")
-                    k = k.strip()
-                    v = v.strip().strip('"').strip("'")
-                    if k == "SUPABASE_URL" and not sb_url:
-                        sb_url = v
-                    elif k == "SUPABASE_SERVICE_ROLE_KEY" and not sb_key:
-                        sb_key = v
+            secrets_file = Path.home() / ".omega" / "secrets.json"
+            if secrets_file.exists():
+                try:
+                    secrets_data = json.loads(secrets_file.read_text())
+                    if not sb_url:
+                        sb_url = secrets_data.get("SUPABASE_URL", secrets_data.get("supabase_url", ""))
+                    if not sb_key:
+                        sb_key = secrets_data.get("SUPABASE_SERVICE_ROLE_KEY", secrets_data.get("supabase_key", ""))
+                except (json.JSONDecodeError, OSError):
+                    pass
         if not sb_url or not sb_key:
             return
 
