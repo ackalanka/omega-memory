@@ -45,10 +45,11 @@ _RERANKER_MODEL = None  # Tuple of (tokenizer, session) when loaded
 # Override with OMEGA_RERANKER_MODEL env var.
 _AVAILABLE_MODELS = {
     "bge-reranker-v2-m3": {
-        "repo_id": "BAAI/bge-reranker-v2-m3",
+        "repo_id": "onnx-community/bge-reranker-v2-m3-ONNX",
         "dir": "~/.cache/omega/models/bge-reranker-v2-m3-onnx",
         "files": [
             ("onnx/model.onnx", "model.onnx"),
+            ("onnx/model.onnx_data", "model.onnx_data"),
             ("tokenizer.json", "tokenizer.json"),
             ("config.json", "config.json"),
         ],
@@ -203,8 +204,12 @@ def download_model(target_dir: str | None = None, model_name: str | None = None)
     target_path = Path(target_dir)
     target_path.mkdir(parents=True, exist_ok=True)
 
-    # Check if already downloaded
-    if (target_path / "model.onnx").exists() and (target_path / "tokenizer.json").exists():
+    # Check if already downloaded (all expected files present)
+    all_present = all(
+        (target_path / local_name).exists()
+        for _, local_name in model_config["files"]
+    )
+    if all_present:
         logger.info(f"Cross-encoder model already exists at {target_path}")
         return str(target_path)
 
@@ -236,11 +241,14 @@ def download_model(target_dir: str | None = None, model_name: str | None = None)
             logger.info(f"Cross-encoder model downloaded to {target_path}")
             return str(target_path)
         else:
-            # hf_hub_download may have put model.onnx in onnx/ subdir
-            onnx_subdir = target_path / "onnx" / "model.onnx"
-            if onnx_subdir.exists():
+            # hf_hub_download may have put files in onnx/ subdir
+            onnx_subdir = target_path / "onnx"
+            if (onnx_subdir / "model.onnx").exists():
                 import shutil
-                shutil.copy2(str(onnx_subdir), str(target_path / "model.onnx"))
+                shutil.copy2(str(onnx_subdir / "model.onnx"), str(target_path / "model.onnx"))
+                # Also copy sidecar data file if present (required by bge-reranker-v2-m3)
+                if (onnx_subdir / "model.onnx_data").exists():
+                    shutil.copy2(str(onnx_subdir / "model.onnx_data"), str(target_path / "model.onnx_data"))
                 logger.info(f"Cross-encoder model downloaded to {target_path}")
                 return str(target_path)
             logger.error("model.onnx not found after download")
