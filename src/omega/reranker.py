@@ -5,6 +5,9 @@ Provides:
 - cross_encoder_score(query, passages) → list of relevance scores (or None)
 - Lazy model loading with circuit breaker (3 attempts, 5-min cooldown)
 - Env-var disable: OMEGA_CROSS_ENCODER=0
+- Precision selection: OMEGA_RERANKER_PRECISION=fp32|int8 (default: fp32)
+  fp32: full precision, ~2.3 GB on disk, ~2.5 GB RSS
+  int8: quantized, ~571 MB on disk, ~650 MB RSS
 
 Uses cross-encoder/ms-marco-MiniLM-L-6-v2 via ONNX Runtime.
 Mirrors the loading patterns from omega.embedding.
@@ -42,17 +45,30 @@ _RERANKER_MODEL = None  # Tuple of (tokenizer, session) when loaded
 
 # Model selection: bge-reranker-v2-m3 is general-purpose (not web-search-specific),
 # which performs better on conversational memory than MS-MARCO (P2).
-# Override with OMEGA_RERANKER_MODEL env var.
+# Override model with OMEGA_RERANKER_MODEL, precision with OMEGA_RERANKER_PRECISION.
 _AVAILABLE_MODELS = {
     "bge-reranker-v2-m3": {
         "repo_id": "onnx-community/bge-reranker-v2-m3-ONNX",
-        "dir": "~/.cache/omega/models/bge-reranker-v2-m3-onnx",
-        "files": [
-            ("onnx/model.onnx", "model.onnx"),
-            ("onnx/model.onnx_data", "model.onnx_data"),
-            ("tokenizer.json", "tokenizer.json"),
-            ("config.json", "config.json"),
-        ],
+        "default_precision": "fp32",
+        "precisions": {
+            "fp32": {
+                "dir": "~/.cache/omega/models/bge-reranker-v2-m3-onnx",
+                "files": [
+                    ("onnx/model.onnx", "model.onnx"),
+                    ("onnx/model.onnx_data", "model.onnx_data"),
+                    ("tokenizer.json", "tokenizer.json"),
+                    ("config.json", "config.json"),
+                ],
+            },
+            "int8": {
+                "dir": "~/.cache/omega/models/bge-reranker-v2-m3-onnx-int8",
+                "files": [
+                    ("onnx/model_quantized.onnx", "model.onnx"),
+                    ("tokenizer.json", "tokenizer.json"),
+                    ("config.json", "config.json"),
+                ],
+            },
+        },
     },
     "ms-marco-MiniLM-L-6-v2": {
         "repo_id": "cross-encoder/ms-marco-MiniLM-L-6-v2",
@@ -64,18 +80,41 @@ _AVAILABLE_MODELS = {
         ],
     },
 }
+
+
+def _resolve_model_config(model_name: str, precision: str | None = None) -> tuple[str, str, list[tuple[str, str]]]:
+    """Resolve model config to (repo_id, dir, files) including precision selection."""
+    model = _AVAILABLE_MODELS.get(model_name, _AVAILABLE_MODELS["ms-marco-MiniLM-L-6-v2"])
+
+    if "precisions" in model:
+        if precision is None:
+            precision = os.environ.get("OMEGA_RERANKER_PRECISION", model["default_precision"])
+        if precision not in model["precisions"]:
+            logger.warning("Unknown precision '%s', falling back to %s", precision, model["default_precision"])
+            precision = model["default_precision"]
+        variant = model["precisions"][precision]
+        return model["repo_id"], variant["dir"], variant["files"]
+
+    return model["repo_id"], model["dir"], model["files"]
+
+
 # Auto-detect best available model: prefer bge-reranker-v2-m3 (general-purpose,
 # better on conversational memory) over ms-marco (web-search-specific).
 # Override with OMEGA_RERANKER_MODEL env var.
 def _resolve_reranker_model() -> tuple:
     env = os.environ.get("OMEGA_RERANKER_MODEL")
     if env:
-        cfg = _AVAILABLE_MODELS.get(env, _AVAILABLE_MODELS["ms-marco-MiniLM-L-6-v2"])
-        return env, cfg["dir"]
-    # Auto-detect: prefer bge-reranker-v2-m3 if ONNX model exists on disk
-    bge_dir = Path(os.path.expanduser(_AVAILABLE_MODELS["bge-reranker-v2-m3"]["dir"]))
-    if (bge_dir / "model.onnx").exists():
-        return "bge-reranker-v2-m3", _AVAILABLE_MODELS["bge-reranker-v2-m3"]["dir"]
+        _, model_dir, _ = _resolve_model_config(env)
+        return env, model_dir
+    # Auto-detect: prefer bge-reranker-v2-m3 if ONNX model exists on disk.
+    # Check the precision-specific dir first (env var or default), then any variant.
+    _, preferred_dir, _ = _resolve_model_config("bge-reranker-v2-m3")
+    if (Path(os.path.expanduser(preferred_dir)) / "model.onnx").exists():
+        return "bge-reranker-v2-m3", preferred_dir
+    for variant in _AVAILABLE_MODELS["bge-reranker-v2-m3"]["precisions"].values():
+        d = variant["dir"]
+        if (Path(os.path.expanduser(d)) / "model.onnx").exists():
+            return "bge-reranker-v2-m3", d
     return "ms-marco-MiniLM-L-6-v2", _AVAILABLE_MODELS["ms-marco-MiniLM-L-6-v2"]["dir"]
 
 _RERANKER_MODEL_NAME, _RERANKER_DEFAULT_DIR = _resolve_reranker_model()
@@ -185,21 +224,27 @@ def reset_reranker_state():
         _get_reranker_model._attempt_count = 0
 
 
-def download_model(target_dir: str | None = None, model_name: str | None = None) -> str | None:
+def download_model(
+    target_dir: str | None = None,
+    model_name: str | None = None,
+    precision: str | None = None,
+) -> str | None:
     """Download cross-encoder model from HuggingFace Hub.
 
     Args:
         target_dir: Directory to download into. Defaults to model-specific dir.
         model_name: Model name from _AVAILABLE_MODELS. Defaults to current selection.
+        precision: "fp32" (~2.3 GB) or "int8" (~571 MB). Defaults to
+            OMEGA_RERANKER_PRECISION env var, then "fp32".
 
     Returns:
         Path to the model directory, or None on failure.
     """
     model_name = model_name or _RERANKER_MODEL_NAME
-    model_config = _AVAILABLE_MODELS.get(model_name, _AVAILABLE_MODELS["ms-marco-MiniLM-L-6-v2"])
+    repo_id, default_dir, files_to_download = _resolve_model_config(model_name, precision)
 
     if target_dir is None:
-        target_dir = os.path.expanduser(model_config["dir"])
+        target_dir = os.path.expanduser(default_dir)
 
     target_path = Path(target_dir)
     target_path.mkdir(parents=True, exist_ok=True)
@@ -207,14 +252,11 @@ def download_model(target_dir: str | None = None, model_name: str | None = None)
     # Check if already downloaded (all expected files present)
     all_present = all(
         (target_path / local_name).exists()
-        for _, local_name in model_config["files"]
+        for _, local_name in files_to_download
     )
     if all_present:
         logger.info(f"Cross-encoder model already exists at {target_path}")
         return str(target_path)
-
-    repo_id = model_config["repo_id"]
-    files_to_download = model_config["files"]
 
     try:
         from huggingface_hub import hf_hub_download

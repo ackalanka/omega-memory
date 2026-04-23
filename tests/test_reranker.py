@@ -158,6 +158,49 @@ class TestCrossEncoderModelLifecycle:
 # 4. TestModelDownload
 # ---------------------------------------------------------------------------
 
+class TestPrecisionResolution:
+    """Test OMEGA_RERANKER_PRECISION env var and _resolve_model_config."""
+
+    def teardown_method(self):
+        os.environ.pop("OMEGA_RERANKER_PRECISION", None)
+
+    def test_default_precision_is_fp32(self):
+        """Without env var, bge-reranker defaults to fp32."""
+        os.environ.pop("OMEGA_RERANKER_PRECISION", None)
+        repo_id, dir_path, files = reranker._resolve_model_config("bge-reranker-v2-m3")
+        assert "bge-reranker-v2-m3-onnx" in dir_path
+        assert "int8" not in dir_path
+        file_names = [remote for remote, _ in files]
+        assert "onnx/model.onnx_data" in file_names
+
+    def test_int8_precision(self):
+        """OMEGA_RERANKER_PRECISION=int8 selects quantized model."""
+        os.environ["OMEGA_RERANKER_PRECISION"] = "int8"
+        repo_id, dir_path, files = reranker._resolve_model_config("bge-reranker-v2-m3")
+        assert "int8" in dir_path
+        file_names = [remote for remote, _ in files]
+        assert "onnx/model_quantized.onnx" in file_names
+        assert "onnx/model.onnx_data" not in file_names
+
+    def test_invalid_precision_falls_back(self):
+        """Unknown precision falls back to default_precision (fp32)."""
+        os.environ["OMEGA_RERANKER_PRECISION"] = "fp64"
+        repo_id, dir_path, files = reranker._resolve_model_config("bge-reranker-v2-m3")
+        assert "int8" not in dir_path
+
+    def test_precision_ignored_for_msmarco(self):
+        """ms-marco has no precision variants; env var is ignored."""
+        os.environ["OMEGA_RERANKER_PRECISION"] = "int8"
+        repo_id, dir_path, files = reranker._resolve_model_config("ms-marco-MiniLM-L-6-v2")
+        assert "ms-marco" in dir_path
+
+    def test_explicit_precision_overrides_env(self):
+        """Explicit precision param overrides env var."""
+        os.environ["OMEGA_RERANKER_PRECISION"] = "fp32"
+        _, dir_path, files = reranker._resolve_model_config("bge-reranker-v2-m3", precision="int8")
+        assert "int8" in dir_path
+
+
 class TestModelDownload:
     """Test model download functionality."""
 
