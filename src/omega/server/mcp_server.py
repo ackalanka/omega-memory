@@ -723,8 +723,55 @@ def _get_current_rss_bytes() -> int:
         except Exception:
             pass
 
+    if sys.platform == "win32":
+        # Windows: GetProcessMemoryInfo via psapi. The `resource` stdlib module
+        # is Unix-only, so the getrusage fallback below would crash at import.
+        try:
+            from ctypes import wintypes
+
+            class _PROCESS_MEMORY_COUNTERS(ctypes.Structure):
+                _fields_ = [
+                    ("cb", wintypes.DWORD),
+                    ("PageFaultCount", wintypes.DWORD),
+                    ("PeakWorkingSetSize", ctypes.c_size_t),
+                    ("WorkingSetSize", ctypes.c_size_t),
+                    ("QuotaPeakPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t),
+                    ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                    ("PagefileUsage", ctypes.c_size_t),
+                    ("PeakPagefileUsage", ctypes.c_size_t),
+                ]
+
+            kernel32 = ctypes.windll.kernel32
+            psapi = ctypes.windll.psapi
+            counters = _PROCESS_MEMORY_COUNTERS()
+            counters.cb = ctypes.sizeof(counters)
+            # GetCurrentProcess() returns a pseudo-handle that has been
+            # observed to fail in some configs; OpenProcess on the current
+            # PID is more reliable per the Windows bug report.
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = kernel32.OpenProcess(
+                PROCESS_QUERY_LIMITED_INFORMATION, False,
+                kernel32.GetCurrentProcessId(),
+            )
+            if handle:
+                try:
+                    if psapi.GetProcessMemoryInfo(
+                        handle, ctypes.byref(counters), counters.cb,
+                    ):
+                        return counters.WorkingSetSize
+                finally:
+                    kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+        return 0
+
     # Fallback: getrusage (peak RSS, not current — but better than nothing)
-    import resource
+    try:
+        import resource
+    except ModuleNotFoundError:
+        return 0
     rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     if sys.platform != "darwin":
         rss *= 1024  # KB to bytes on Linux
