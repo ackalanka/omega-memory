@@ -1,8 +1,11 @@
 #!/usr/bin/env python3.11
 """Release omega-memory to PyPI.
 
-Replaces the broken GitHub Actions publish.yml workflow. Run locally from
-~/Projects/omega-public/ when shipping a new public release.
+Alternative path to the GH Actions publish.yml workflow on omega-public.
+The script pushes a git tag but does not create a GitHub release, so the
+auto-publish workflow does not fire — no double-publish risk.
+
+Use when you don't want to wait for or trust GitHub Actions runners.
 
 Usage:
     python3.11 scripts/release.py <version>            # publish for real
@@ -60,11 +63,14 @@ def preflight(version: str) -> None:
     if not secrets.get("PYPI_TOKEN_OMEGA"):
         sys.exit("PYPI_TOKEN_OMEGA not in ~/.omega/secrets.json")
 
-    status = subprocess.run(
-        ["git", "status", "--porcelain"], cwd=REPO, capture_output=True, text=True, check=True,
+    # Only block on uncommitted changes to files this script will modify.
+    tracked_targets = ["pyproject.toml", "src/omega/__init__.py"]
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain", "--"] + tracked_targets,
+        cwd=REPO, capture_output=True, text=True, check=True,
     ).stdout.strip()
-    if status:
-        sys.exit(f"Working tree not clean:\n{status}")
+    if dirty:
+        sys.exit(f"Uncommitted changes to release-target files:\n{dirty}")
 
     branch = subprocess.run(
         ["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True,
@@ -91,19 +97,19 @@ def preflight(version: str) -> None:
 
 def bump_version(version: str) -> None:
     step(f"Bumping version to {version}")
-    for path, pattern in [
-        (PYPROJECT, r'^version = "[^"]+"'),
-        (INIT_PY, r'^__version__ = "[^"]+"'),
+    for path, pattern, replacement in [
+        (PYPROJECT, r'^version = "[^"]+"', f'version = "{version}"'),
+        (INIT_PY, r'^__version__ = "[^"]+"', f'__version__ = "{version}"'),
     ]:
         text = path.read_text()
-        if path == PYPROJECT:
-            new = re.sub(pattern, f'version = "{version}"', text, count=1, flags=re.MULTILINE)
-        else:
-            new = re.sub(pattern, f'__version__ = "{version}"', text, count=1, flags=re.MULTILINE)
+        if not re.search(pattern, text, flags=re.MULTILINE):
+            sys.exit(f"Pattern not found in {path}: {pattern!r}")
+        new = re.sub(pattern, replacement, text, count=1, flags=re.MULTILINE)
         if new == text:
-            sys.exit(f"No version replacement in {path}")
-        path.write_text(new)
-        print(f"  updated {path.relative_to(REPO)}")
+            print(f"  unchanged {path.relative_to(REPO)}: already at {version}")
+        else:
+            path.write_text(new)
+            print(f"  updated {path.relative_to(REPO)}")
 
 
 def build() -> tuple[Path, Path]:
@@ -153,8 +159,18 @@ def publish_pypi(wheel: Path, sdist: Path) -> None:
 def git_commit_tag_push(version: str) -> None:
     step("Committing + tagging + pushing")
     run(["git", "add", "pyproject.toml", "src/omega/__init__.py"])
-    run(["git", "commit", "-m", f"chore: release v{version}"])
-    run(["git", "tag", f"v{version}"])
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--name-only"], cwd=REPO, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if staged:
+        run(["git", "commit", "-m", f"chore: release v{version}"])
+    else:
+        print("  no version-file changes to commit (idempotent re-run)")
+    existing = subprocess.run(
+        ["git", "tag", "-l", f"v{version}"], cwd=REPO, capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    if not existing:
+        run(["git", "tag", f"v{version}"])
     run(["git", "push", "origin", "main"])
     run(["git", "push", "origin", f"v{version}"])
 
