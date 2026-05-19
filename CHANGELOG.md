@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.14] - 2026-05-19
+
+### Fixed
+- **`omega_maintain` "Server disconnected" / RPC timeout in Claude Desktop**:
+  long-running maintenance actions (`consolidate`, `compact`, `backup`,
+  `restore`, `discover_connections`, `synthesize_insights`,
+  `backfill_embeddings`) ran synchronous SQLite + ONNX work directly on the
+  MCP server's asyncio event loop. On populated stores this blocked the stdio
+  transport long enough for Claude Desktop to hit its ~4-minute RPC timeout
+  and drop the connection. These actions now submit to the shared SQLite
+  executor via an in-process JobRegistry and return a `job_id` in under
+  500 ms; the event loop stays responsive. Poll with
+  `omega_maintain action=job_status job_id=<id>` or pass `wait=true` to keep
+  the legacy blocking behavior.
+
 ## [1.3.1] - 2026-03-17
 
 ### Added
