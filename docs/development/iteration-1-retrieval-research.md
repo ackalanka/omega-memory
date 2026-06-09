@@ -244,6 +244,8 @@ Schema additions to `omega_memory`:
 - `track_access`: default `true`;
 - `content_mode`: `full`, `preview`, or `none`, default `full`;
 - `preview_chars`: default `800`, clamped;
+- `budget_chars`: optional global content budget when
+  `content_mode="full"`; omit for unbounded direct fetch;
 - `format`: `markdown` or `json`, default `markdown`;
 - `max_related`: optional, only used when `include_edges=true`;
 - `edge_types`: reuse existing edge type filter.
@@ -257,15 +259,21 @@ Return contract:
   `session_id`, `project`, `entity_id`, `agent_type`, `tags`, `status`,
   `source_uri`, `derived_from`, `metadata`, `strength`, `relevance`,
   `access_count`, `last_accessed`, `valid_from`, `valid_until`;
+- JSON format includes content-control metadata with content mode, optional
+  budget, budget used, truncated IDs, and omitted IDs;
 - markdown format prints ID, type, status, timestamps, metadata summary, then
-  full content.
+  full content, plus a compact budget/truncation footer when relevant;
+- related edge records follow the same content mode and optional budget as
+  primary records.
 
 Safety:
 
 - never mutate content or lifecycle;
 - `track_access=false` for audits and tests;
 - clamp batch size, probably 50;
-- clamp per-record content if caller asks for preview.
+- clamp per-record content if caller asks for preview;
+- clamp optional full-content budget to safe bounds and report truncation
+  explicitly instead of silently dropping content.
 
 ### P0. Full and structured `omega_query`
 
@@ -562,6 +570,7 @@ Focused unit/integration tests:
 - MCP schema includes new arguments and `omega_memory.action="get"`.
 - `omega_memory(get)` returns full content longer than 200 characters.
 - batch get returns full content and explicit not-found entries.
+- batch get honors optional `budget_chars` and reports truncated/omitted IDs.
 - `track_access=false` does not increment access count.
 - default `omega_query` output remains preview markdown.
 - `omega_query(content_mode="full")` returns full content subject to

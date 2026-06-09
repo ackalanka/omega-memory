@@ -141,12 +141,14 @@ or `omega_context` returns an ID that needs exact inspection.
 
 ```text
 omega_memory(action="get", memory_id="mem-abc123", format="json")
-omega_memory(action="get", memory_ids=["mem-a", "mem-b"], include_metadata=true)
+omega_memory(action="get", memory_ids=["mem-a", "mem-b"], include_metadata=true, budget_chars=12000)
 omega_memory(action="get", memory_id="mem-abc123", include_edges=true, max_related=5)
 ```
 
 Set `track_access=false` for audits or tests. Use `content_mode="preview"` or
-`content_mode="none"` when you only need metadata.
+`content_mode="none"` when you only need metadata. For batch hydration or
+edge expansion, set `budget_chars` to cap full content and inspect the returned
+truncated/omitted ID lists before acting.
 
 ### Project Context Packs
 

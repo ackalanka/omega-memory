@@ -117,6 +117,22 @@ async def _run_smoke(repo_root: Path, project: str) -> dict:
     if get_payload["record"]["content"] != long_content:
         _fail("omega_memory(get) did not return full content")
 
+    get_budget_payload = json.loads(
+        _payload(
+            await handle_omega_memory({
+                "action": "get",
+                "memory_id": memory_id,
+                "format": "json",
+                "track_access": False,
+                "budget_chars": 80,
+            })
+        )
+    )
+    if get_budget_payload["content"]["content_budget_used"] != 80:
+        _fail("omega_memory(get) did not honor budget_chars")
+    if not get_budget_payload["content"]["content_truncated"]:
+        _fail("omega_memory(get) did not report budget truncation")
+
     query_payload = json.loads(
         _payload(
             await handle_omega_query({

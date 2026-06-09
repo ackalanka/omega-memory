@@ -92,6 +92,10 @@ Recommended arguments:
 - `include_metadata`: default `true`.
 - `include_edges`: default `false`.
 - `track_access`: default `true`.
+- `content_mode`: `full`, `preview`, or `none`.
+- `preview_chars`: preview size for `content_mode="preview"`.
+- `budget_chars`: optional global content budget for `content_mode="full"`;
+  omit for unbounded direct fetch.
 - `format`: `markdown` or `json`.
 
 Expected behavior:
@@ -100,6 +104,9 @@ Expected behavior:
 - Include ID, event type, lifecycle status, created time, tags, project,
   session, source URI, derived-from, strength/relevance if known, and metadata.
 - Return not-found IDs explicitly in batch mode.
+- Apply content mode and optional full-content budget across both primary
+  records and related edge records.
+- Report truncated and omitted content IDs explicitly when a budget is applied.
 - Avoid modifying memory content or lifecycle state.
 
 Why first:

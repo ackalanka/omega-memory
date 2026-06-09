@@ -23,6 +23,7 @@ from omega.server.handlers import (
     handle_omega_stats,
     handle_omega_browse,
 )
+from omega.server.tool_schemas import TOOL_SCHEMAS
 from omega.sqlite_store import SQLiteStore
 
 
@@ -77,6 +78,13 @@ class TestOmegaReflect:
 
 
 class TestOmegaMemoryGet:
+    def test_get_schema_exposes_budget_chars(self):
+        schema = next(tool for tool in TOOL_SCHEMAS if tool["name"] == "omega_memory")
+        props = schema["inputSchema"]["properties"]
+        assert "get" in props["action"]["enum"]
+        assert "budget_chars" in props
+        assert "unbounded direct fetch" in props["budget_chars"]["description"]
+
     @pytest.mark.asyncio
     async def test_get_single_memory_markdown_full_content(self, mock_get_store):
         store = mock_get_store
@@ -175,6 +183,48 @@ class TestOmegaMemoryGet:
         assert payload["not_found"] == [missing]
 
     @pytest.mark.asyncio
+    async def test_get_batch_full_content_budget_truncates_and_reports(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("A" * 30, metadata={"event_type": "memory"})
+        second = store.store("B" * 30, metadata={"event_type": "lesson_learned"})
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, second],
+            "format": "json",
+            "budget_chars": 40,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["content"]["budget_chars"] == 40
+        assert payload["content"]["content_budget_used"] == 40
+        assert payload["content"]["content_truncated"] is True
+        assert payload["records"][0]["content"] == "A" * 30
+        assert payload["records"][1]["content"] == "B" * 10
+        assert payload["records"][1]["content_truncated"] is True
+        assert payload["records"][1]["id"] in payload["content"]["content_truncated_ids"]
+
+    @pytest.mark.asyncio
+    async def test_get_markdown_reports_budget_footer(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("First markdown budget body.", metadata={"event_type": "memory"})
+        second = store.store("Second markdown budget body.", metadata={"event_type": "memory"})
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, second],
+            "budget_chars": 35,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        text = result["content"][0]["text"]
+        assert "Content budget: 35/35 chars" in text
+        assert "Content truncated:" in text
+
+    @pytest.mark.asyncio
     async def test_get_track_access_false_does_not_increment(self, mock_get_store):
         store = mock_get_store
         node_id = store.store("Audit fetch should not update access counters.")
@@ -220,7 +270,66 @@ class TestOmegaMemoryGet:
         related = payload["record"]["related"][0]
         assert related["node_id"] == child_id
         assert related["id"] == child_id
+        assert related["event_type"] == "lesson_learned"
         assert child_id in markdown_result["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_respects_include_metadata_false(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store("Parent related metadata toggle.", metadata={"event_type": "decision"})
+        child_id = store.store(
+            "Child related metadata toggle distinct body.",
+            metadata={"event_type": "lesson_learned", "private_note": "hidden"},
+        )
+        assert parent_id != child_id
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "include_metadata": False,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        related = record["related"][0]
+        assert "metadata" not in record
+        assert "metadata" not in related
+        assert related["id"] == child_id
+        assert related["event_type"] == "lesson_learned"
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_respects_content_mode_none(self, mock_get_store):
+        store = mock_get_store
+        parent_text = "Parent none-mode retrieval anchor for deployment policy."
+        child_text = "Child none-mode retrieval edge for sqlite maintenance."
+        parent_id = store.store(parent_text, metadata={"event_type": "decision"})
+        child_id = store.store(child_text, metadata={"event_type": "lesson_learned"})
+        assert parent_id != child_id
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "content_mode": "none",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        related = record["related"][0]
+        assert record["content"] is None
+        assert related["id"] == child_id
+        assert related["content"] is None
+        assert record["content_length"] == len(parent_text)
+        assert related["content_length"] == len(child_text)
 
 
 # ---------------------------------------------------------------------------

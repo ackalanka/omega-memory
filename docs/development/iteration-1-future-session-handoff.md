@@ -118,10 +118,14 @@ What it does:
 - supports `format="markdown"` and `format="json"`;
 - supports `content_mode="full"`, `content_mode="preview"`, and
   `content_mode="none"`;
+- supports optional `budget_chars` for `content_mode="full"`; omit it for
+  unbounded direct fetch;
 - includes stable record fields such as ID, content, event type, timestamps,
   project, session, entity, agent type, tags, lifecycle status, source URI,
   derived-from, strength, relevance, access counters, validity windows, TTL,
   and metadata;
+- reports direct-get content-control metadata including budget, budget used,
+  truncated IDs, and omitted IDs;
 - supports `track_access=false` for audits and tests;
 - supports `include_edges=true`, `max_related`, and `edge_types`.
 
@@ -129,7 +133,9 @@ Important compatibility detail:
 
 - direct edge expansion preserves store-level `node_id`;
 - direct edge expansion also adds an `id` alias so agents can consume related
-  records consistently with `omega_recall`.
+  records consistently with `omega_recall`;
+- direct edge records now follow the same `content_mode` and optional
+  `budget_chars` contract as primary direct-get records.
 
 Primary tests:
 
@@ -502,16 +508,6 @@ is the intended contract.
 
 The current implementation accounts for memory content, not every rendered
 markdown character.
-
-### Remaining: Direct Get Content Budget Option
-
-`omega_memory(action="get")` supports full, preview, and none content modes,
-but it does not currently expose the same global `budget_chars` behavior as
-`omega_query`, browse, recall, and context.
-
-This is not a blocker because direct get is intentionally surgical and supports
-preview mode. If large batch get becomes common, add a batch-level
-`budget_chars` option with explicit truncation and omitted-content metadata.
 
 ### Remaining: Related Expansion Scoring Policy
 

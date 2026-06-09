@@ -320,6 +320,7 @@ TOOL_SCHEMAS = [
                 "track_access": {"type": "boolean", "description": "For action='get', increment access_count and last_accessed (default true). Set false for audits/tests.", "default": True},
                 "content_mode": {"type": "string", "enum": ["full", "preview", "none"], "description": "For action='get': return full content, a preview, or no content (default full)", "default": "full"},
                 "preview_chars": {"type": "integer", "description": "Preview character limit for action='get' when content_mode='preview' (default 800)", "default": 800},
+                "budget_chars": {"type": "integer", "description": "Optional global content budget for action='get' when content_mode='full'. Omit for unbounded direct fetch. Applies across primary and related records and reports truncated/omitted IDs."},
                 "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format for action='get' (default markdown)", "default": "markdown"},
                 "max_related": {"type": "integer", "description": "Max related memories for action='get' when include_edges=true (default 10)", "default": 10},
             },

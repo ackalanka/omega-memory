@@ -410,13 +410,118 @@ def _format_memory_record_markdown(record: dict, index: int | None = None) -> st
         lines.append("Related:")
         for related in record["related"]:
             related_id = related.get("node_id") or related.get("id")
-            rel_content = related.get("content", "")
+            rel_content_value = related.get("content")
+            rel_content = "" if rel_content_value is None else str(rel_content_value)
             if len(rel_content) > 160:
                 rel_content = rel_content[:160] + "..."
             lines.append(
                 f"- `{related_id}` hop={related.get('hop')} "
                 f"type={related.get('edge_type')} weight={related.get('weight')}: {rel_content}"
             )
+    return "\n".join(lines)
+
+
+def _apply_get_record_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+) -> tuple[list[dict], dict]:
+    """Apply direct-get content controls to primary and related records."""
+    remaining = budget_chars if content_mode == "full" and budget_chars is not None else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_ids = []
+
+    def _record_identifier(record: dict) -> str:
+        return str(record.get("id") or record.get("node_id") or "")
+
+    def _apply_to_record(record: dict) -> dict:
+        nonlocal remaining, budget_used
+        controlled = dict(record)
+        original_content = str(controlled.get("content") or "")
+        controlled["content_length"] = int(controlled.get("content_length") or len(original_content))
+        controlled["content_mode"] = content_mode
+        controlled["content_truncated"] = False
+        controlled["content_omitted_due_to_budget"] = False
+
+        record_id = _record_identifier(controlled)
+        if content_mode == "none":
+            controlled["content"] = None
+            return controlled
+
+        if content_mode == "preview":
+            if len(original_content) > preview_chars:
+                controlled["content"] = original_content[:preview_chars]
+                controlled["content_truncated"] = True
+                if record_id:
+                    truncated_ids.append(record_id)
+            else:
+                controlled["content"] = original_content
+            budget_used += len(controlled.get("content") or "")
+            return controlled
+
+        if remaining is None:
+            controlled["content"] = original_content
+            budget_used += len(original_content)
+        elif remaining <= 0:
+            controlled["content"] = ""
+            controlled["content_truncated"] = True
+            controlled["content_omitted_due_to_budget"] = True
+            if record_id:
+                omitted_ids.append(record_id)
+        elif len(original_content) > remaining:
+            controlled["content"] = original_content[:remaining]
+            controlled["content_truncated"] = True
+            controlled["budget_truncated"] = True
+            if record_id:
+                truncated_ids.append(record_id)
+            budget_used += remaining
+            remaining = 0
+        else:
+            controlled["content"] = original_content
+            budget_used += len(original_content)
+            remaining -= len(original_content)
+
+        return controlled
+
+    controlled_records = []
+    for raw in records:
+        record = _apply_to_record(raw)
+        if record.get("related"):
+            record["related"] = [_apply_to_record(related) for related in record["related"]]
+        controlled_records.append(record)
+
+    return controlled_records, {
+        "content_mode": content_mode,
+        "preview_chars": preview_chars if content_mode == "preview" else None,
+        "budget_chars": budget_chars if content_mode == "full" else None,
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_ids),
+    }
+
+
+def _format_content_control_footer(content_meta: dict) -> str:
+    """Render compact truncation/omission metadata for markdown outputs."""
+    lines = []
+    if content_meta.get("budget_chars") is not None:
+        lines.append(
+            "Content budget: "
+            f"{content_meta.get('content_budget_used', 0)}/{content_meta.get('budget_chars')} chars"
+        )
+    if content_meta.get("content_truncated_ids"):
+        lines.append(
+            "Content truncated: "
+            + ", ".join(f"`{rid}`" for rid in content_meta["content_truncated_ids"])
+        )
+    if content_meta.get("content_omitted_ids"):
+        lines.append(
+            "Content omitted due to budget: "
+            + ", ".join(f"`{rid}`" for rid in content_meta["content_omitted_ids"])
+        )
     return "\n".join(lines)
 
 
@@ -2446,6 +2551,10 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
     include_edges = arguments.get("include_edges", False)
     track_access = arguments.get("track_access", True)
     preview_chars = _clamp_int(arguments.get("preview_chars", 800), default=800, min_val=1, max_val=20000)
+    raw_budget = arguments.get("budget_chars")
+    budget_chars = None
+    if raw_budget is not None:
+        budget_chars = _clamp_int(raw_budget, default=30000, min_val=0, max_val=200000)
     max_related = _clamp_int(arguments.get("max_related", 10), default=10, min_val=0, max_val=50)
     edge_types = arguments.get("edge_types")
     if edge_types is not None and not isinstance(edge_types, list):
@@ -2465,7 +2574,7 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
             record = _memory_result_to_dict(
                 node,
                 include_metadata=bool(include_metadata),
-                content_mode=content_mode,
+                content_mode="full",
                 preview_chars=preview_chars,
             )
             if include_edges and max_related > 0 and hasattr(db, "get_related_chain"):
@@ -2478,10 +2587,21 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
                 normalized_related = []
                 for related_record in related[:max_related]:
                     related_payload = dict(related_record)
+                    related_metadata = dict(related_payload.get("metadata") or {})
                     related_payload.setdefault("id", related_payload.get("node_id"))
+                    related_payload.setdefault("event_type", related_metadata.get("event_type", "memory"))
+                    if not include_metadata:
+                        related_payload.pop("metadata", None)
                     normalized_related.append(related_payload)
                 record["related"] = normalized_related
             records.append(record)
+
+        records, content_meta = _apply_get_record_content_controls(
+            records,
+            content_mode=content_mode,
+            preview_chars=preview_chars,
+            budget_chars=budget_chars,
+        )
 
         if single and not records:
             return mcp_error(f"Memory `{ids[0]}` not found")
@@ -2491,6 +2611,7 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
             "count": len(records),
             "records": records,
             "not_found": not_found,
+            "content": content_meta,
         }
         if single:
             payload["record"] = records[0]
@@ -2499,7 +2620,11 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
             return mcp_response(json.dumps(payload, indent=2))
 
         if single:
-            return mcp_response(_format_memory_record_markdown(records[0]))
+            markdown = _format_memory_record_markdown(records[0])
+            footer = _format_content_control_footer(content_meta)
+            if footer:
+                markdown = markdown + "\n\n" + footer
+            return mcp_response(markdown)
 
         lines = [f"# Memories ({len(records)} found"]
         if not_found:
@@ -2509,6 +2634,9 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
             lines.extend(["", "Not found: " + ", ".join(f"`{mid}`" for mid in not_found)])
         for i, record in enumerate(records, 1):
             lines.extend(["", _format_memory_record_markdown(record, index=i)])
+        footer = _format_content_control_footer(content_meta)
+        if footer:
+            lines.extend(["", footer])
         return mcp_response("\n".join(lines))
     except Exception as e:
         logger.error("omega_get_memory failed: %s", e, exc_info=True)

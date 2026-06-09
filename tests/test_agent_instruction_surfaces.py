@@ -41,6 +41,7 @@ def test_retrieval_tool_schemas_explain_agent_use_cases():
     assert "prompt-ready context" in recall["description"]
     assert "project-scoped context pack" in context["description"]
     assert "get full records" in memory["description"]
+    assert "budget_chars" in memory["inputSchema"]["properties"]
     assert "content_mode" in query["inputSchema"]["properties"]
     assert "budget_chars" in query["inputSchema"]["properties"]
 
