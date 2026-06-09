@@ -48,6 +48,11 @@ Iteration 1 focuses on core memory retrieval for agents:
 - full and paginated browse;
 - optional related-memory expansion;
 - retrieval profiles for common agent intents.
+- project context packs via `omega_context`.
+
+The development implementation is complete on `dev/retrieval-tools`; live
+promotion remains separate and must follow
+`docs/development/live-safe-development.md`.
 
 Do not start router, oracle, coordination, cloud sync, federation, encrypted
 profile, or full knowledge-base work unless the user explicitly changes the
@@ -79,6 +84,14 @@ For isolated memory smoke tests:
 ```bash
 OMEGA_HOME=/tmp/omega-memory-dev-home .venv/bin/python -c \
   'from omega.bridge import store, query; print(store("dev smoke", event_type="memory")); print(query("dev smoke", limit=1))'
+```
+
+For Iteration 1 promotion readiness:
+
+```bash
+rm -rf /tmp/omega-memory-dev-promotion-home
+OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
+  .venv/bin/python scripts/retrieval_promotion_smoke.py
 ```
 
 Add focused tests for any retrieval behavior you change. Do not claim a

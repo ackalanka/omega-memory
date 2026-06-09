@@ -75,6 +75,43 @@ omega.cli status` still reported the live `/home/akalanka/.omega/omega.db`.
 Use MCP handler tests, bridge tests, and direct bridge smoke tests for isolated
 development. Treat CLI/hook commands as live-risk unless inspected first.
 
+## Isolated Promotion-Readiness Gate
+
+Before touching the live checkout, run the isolated promotion smoke. This
+verifies that the development checkout can exercise the Iteration 1 retrieval
+MCP handlers with an isolated `OMEGA_HOME`.
+
+Required local gate:
+
+```bash
+cd /home/akalanka/projects/omega-memory-dev
+rm -rf /tmp/omega-memory-dev-promotion-home
+OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
+  .venv/bin/python scripts/retrieval_promotion_smoke.py
+```
+
+Optional fresh-install probe:
+
+```bash
+cd /home/akalanka/projects/omega-memory-dev
+tmpdir="$(mktemp -d /tmp/omega-promotion-venv.XXXXXX)"
+python3 -m venv "$tmpdir/venv"
+"$tmpdir/venv/bin/python" -m pip install -e ".[server]"
+OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
+  "$tmpdir/venv/bin/python" scripts/retrieval_promotion_smoke.py
+rm -rf "$tmpdir"
+```
+
+The script intentionally refuses to run without `OMEGA_HOME` and fails if that
+home resolves to `/home/akalanka/.omega`. It does not run `omega setup` and
+does not modify MCP client configuration.
+
+If the optional fresh-install probe fails during `pip install` because of
+network timeouts or dependency resolver backtracking, do not treat that as a
+retrieval-tool failure. Record the install failure separately, keep the live
+checkout untouched, and rely on the required local gate plus focused tests until
+the packaging/network issue can be investigated.
+
 ## Safe Promotion Back To Live
 
 Before promotion:
@@ -87,13 +124,15 @@ Before promotion:
    .venv/bin/pytest <focused tests>
    ```
 
-2. Back up live memory data:
+2. Run the isolated promotion-readiness gate above.
+
+3. Back up live memory data:
 
    ```bash
    /home/akalanka/projects/omega-memory/.venv/bin/python3.12 -m omega.cli backup
    ```
 
-3. Review the diff:
+4. Review the diff:
 
    ```bash
    git diff --stat

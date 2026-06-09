@@ -564,6 +564,18 @@ Existing checks to run after implementation:
 .venv/bin/pytest tests/test_init_and_json_compat.py tests/test_types.py -q
 ```
 
+Promotion-readiness smoke:
+
+```bash
+rm -rf /tmp/omega-memory-dev-promotion-home
+OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
+  .venv/bin/python scripts/retrieval_promotion_smoke.py
+```
+
+The optional fresh-venv install probe is documented in
+`docs/development/live-safe-development.md`; it may fail for network/resolver
+reasons unrelated to the retrieval handlers.
+
 Use isolated smoke tests with:
 
 ```bash
