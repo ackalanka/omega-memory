@@ -290,6 +290,11 @@ Status: implemented for the Iteration 1 target surfaces.
 `edge_types` with the same output budget. Commit `54d311b` normalizes
 related-memory IDs in direct-get MCP output by preserving the store-level
 `node_id` field and adding an `id` alias for consistent agent consumption.
+The current related-chain traversal also has deterministic ordering:
+nearest hop first, strongest edge weight, edge-type priority, newest edge
+timestamp, then stable memory ID. The edge-type priority is `supersedes`,
+`contradicts`, `evolves`, `causal`, `related`, `derived_from`, then unknown
+edge types.
 
 Add optional graph expansion to `omega_memory(action="get")` and `omega_recall`.
 
@@ -302,7 +307,8 @@ omega_recall(query="release failure", expand_related=true)
 
 Expected behavior:
 
-- Include top related memories by edge weight and type.
+- Include top related memories by nearest hop, edge weight, edge-type
+  priority, edge timestamp, and stable ID.
 - Support filtering edge types such as `related`, `derived_from`,
   `contradicts`, `supersedes`, and `evolves`.
 - Respect the caller's output budget.
@@ -357,11 +363,22 @@ Why later in iteration 1:
 Development checkout status: met and verified on branch `dev/retrieval-tools`.
 Live checkout status: not promoted.
 
-Latest development verification on `2abb057`:
+Latest development verification baseline on `2abb057`:
 
 - `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q`
   passed with 72 tests.
 - `.venv/bin/ruff check src/omega/server/handlers.py src/omega/server/tool_schemas.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py scripts/retrieval_promotion_smoke.py`
+  passed.
+- `git diff --check` passed.
+- `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
+  passed with `status: ok`, `tool_count: 17`, `query_results: 2`,
+  `browse_count: 1`, `recall_results: 3`, and `context_items: 5`.
+
+Additional related-ordering hardening verification before the next slice:
+
+- `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py tests/test_improvements.py::TestGraphTraversal -q`
+  passed with 88 tests.
+- `.venv/bin/ruff check src/omega/sqlite_store/_maintenance.py tests/test_improvements.py tests/test_handler_actions.py tests/test_recall_handler.py`
   passed.
 - `git diff --check` passed.
 - `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`

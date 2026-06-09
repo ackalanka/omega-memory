@@ -41,6 +41,10 @@ Implementation progress:
 - Related-memory MCP output hardening completed in commit `54d311b`: direct
   get edge expansion now preserves `node_id` and adds an `id` alias so agents
   consume related records consistently across direct-get and recall payloads.
+- Related-chain traversal ordering is now deterministic for Iteration 1:
+  nearest hop first, strongest edge weight, edge-type priority, newest edge
+  timestamp, then stable memory ID. Direct get and recall both consume this
+  store-level ordering for related expansion.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -559,7 +563,9 @@ most natural expansions.
    Completed in commit `ffb9723` and covered by
    `tests/test_browse_structured_output.py`.
 10. Add related expansion to get/recall. Completed for `get` and `recall`;
-    browse remains separate.
+    browse remains separate. Related-chain ordering is deterministic:
+    nearest hop, strongest edge weight, edge-type priority, newest edge
+    timestamp, stable memory ID.
 11. Add project context pack. Completed in commit `7b63c82` and
     covered by `tests/test_context_handler.py`.
 
@@ -580,7 +586,9 @@ Focused unit/integration tests:
 - `omega_recall` reports truncation and omitted IDs when budget is tight.
 - retrieval profiles are transparent and dedupe overlapping results.
 - browse pagination returns stable `next_offset`/`has_more`.
-- related expansion includes hop/edge metadata and respects `max_related`.
+- related expansion includes hop/edge metadata, respects `max_related`, and
+  orders related memories by nearest hop, strongest edge weight, edge-type
+  priority, newest edge timestamp, then stable memory ID.
 - `omega_context` returns project-scoped handoff/planning/debug packs with
   stable memory IDs.
 - MCP startup instructions, `omega_protocol`, managed client setup fragments,
@@ -605,11 +613,22 @@ OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
   .venv/bin/python scripts/retrieval_promotion_smoke.py
 ```
 
-Latest verification on `2abb057`:
+Latest verification baseline on `2abb057`:
 
 - `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q`
   passed with 72 tests.
 - `.venv/bin/ruff check src/omega/server/handlers.py src/omega/server/tool_schemas.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py scripts/retrieval_promotion_smoke.py`
+  passed.
+- `git diff --check` passed.
+- `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
+  passed with `status: ok`, `tool_count: 17`, `query_results: 2`,
+  `browse_count: 1`, `recall_results: 3`, and `context_items: 5`.
+
+Additional related-ordering hardening verification before the next slice:
+
+- `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py tests/test_improvements.py::TestGraphTraversal -q`
+  passed with 88 tests.
+- `.venv/bin/ruff check src/omega/sqlite_store/_maintenance.py tests/test_improvements.py tests/test_handler_actions.py tests/test_recall_handler.py`
   passed.
 - `git diff --check` passed.
 - `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
@@ -640,6 +659,9 @@ Iteration 1 is acceptable when a zero-context agent can:
 4. run one recall call that returns a budgeted, prompt-ready block;
 5. browse memory classes with pagination;
 6. optionally expand related memories;
+   related expansion is deterministic under the store-level graph policy:
+   nearest hop, strongest edge weight, edge-type priority, newest edge
+   timestamp, stable memory ID;
 7. learn the workflow from MCP instructions, `omega_protocol`, managed client
    fragments, tool schemas, `omega_tools(tool=..., detail="full")` output, and
    the `omega-memory` skill without chat history;

@@ -96,6 +96,35 @@ Observed results:
 Before any future claim that Iteration 1 is still verified, rerun the relevant
 focused tests from the current head.
 
+Additional current-slice verification before committing the related-ordering
+hardening on 2026-06-10:
+
+```bash
+.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py tests/test_improvements.py::TestGraphTraversal -q
+.venv/bin/ruff check src/omega/sqlite_store/_maintenance.py tests/test_improvements.py tests/test_handler_actions.py tests/test_recall_handler.py
+git diff --check
+rm -rf /tmp/omega-memory-dev-promotion-home
+OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
+  .venv/bin/python scripts/retrieval_promotion_smoke.py
+```
+
+Observed results:
+
+- focused retrieval plus graph traversal suite: 88 tests passed;
+- ruff on the touched implementation/test files: passed;
+- whitespace check: passed.
+- isolated promotion smoke: `status: ok`, `tool_count: 17`,
+  `query_results: 2`, `browse_count: 1`, `recall_results: 3`,
+  `context_items: 5`.
+
+The broader `tests/test_improvements.py` file contains sqlite-vec-dependent
+ranking tests outside this slice. In this environment, one older reranking test
+can return no results when sqlite-vec is installed and the local embedding
+state is not suitable for that assertion. The current slice therefore verifies
+the graph traversal class directly plus all Iteration 1 MCP retrieval handler
+surfaces. Do not treat that older ranking test as evidence about related
+expansion ordering.
+
 ## Completed In Iteration 1
 
 The development implementation for the core retrieval slice is complete in the
@@ -142,6 +171,56 @@ Primary tests:
 ```text
 tests/test_handler_actions.py
 ```
+
+### Completed: Deterministic Related Expansion Ordering
+
+Implemented in:
+
+```text
+src/omega/sqlite_store/_maintenance.py
+```
+
+What it does:
+
+- makes `SQLiteStore.get_related_chain()` traversal deterministic even when
+  the same graph can be reached through unordered frontiers or multiple
+  same-hop edges;
+- keeps the existing nearest-hop behavior: a node found at hop 1 ranks before
+  a node found at hop 2, even if the hop-2 edge has a stronger weight;
+- orders related memories within the same hop by strongest edge weight first;
+- breaks equal-weight ties by explicit edge-type priority:
+  `supersedes`, `contradicts`, `evolves`, `causal`, `related`,
+  `derived_from`, then unknown edge types;
+- breaks remaining ties by newest edge timestamp and then stable `node_id`;
+- records `edge_created_at` in related-chain entries so downstream MCP
+  handlers can expose or inspect the exact edge timestamp used for ordering;
+- replaces a previously visited same-hop node if a later traversal path
+  reaches the same node through a better edge under the same policy;
+- preserves deterministic frontier traversal by visiting frontier IDs in
+  sorted order;
+- preserves direct-get and recall behavior because both MCP paths consume
+  `get_related_chain()` ordering.
+
+Primary tests:
+
+```text
+tests/test_improvements.py::TestGraphTraversal
+tests/test_handler_actions.py::TestOmegaMemoryGet::test_get_include_edges_preserves_deterministic_related_order
+tests/test_recall_handler.py::TestOmegaRecallOutput::test_related_expansion_preserves_deterministic_related_order
+```
+
+Test coverage added:
+
+- stronger same-hop edge ordering;
+- hop-first ordering over stronger distant edges;
+- edge-type priority for equal weights;
+- newest edge timestamp for equal type/weight ties;
+- stable `node_id` ordering for complete ties;
+- duplicate same-hop target replacement with the best edge metadata;
+- propagation of the store order through direct `omega_memory(action="get",
+  include_edges=true)` JSON output;
+- propagation of the store order through `omega_recall(expand_related=true)`
+  JSON output.
 
 ### Completed: Structured And Full Semantic Query Output
 
@@ -509,20 +588,27 @@ is the intended contract.
 The current implementation accounts for memory content, not every rendered
 markdown character.
 
-### Remaining: Related Expansion Scoring Policy
+### Completed: Related Expansion Scoring Policy
 
-Related expansion currently uses existing graph traversal order and the
-store-provided edge data. Future work should define and test a stable policy
-for ordering related memories when multiple edge types and weights are present.
+This is no longer remaining work for Iteration 1. The implemented policy is:
 
-Decide whether ordering should be:
+1. nearest hop first;
+2. strongest edge weight;
+3. edge-type priority:
+   `supersedes`, `contradicts`, `evolves`, `causal`, `related`,
+   `derived_from`, then unknown edge types;
+4. newest edge timestamp;
+5. stable `node_id`.
 
-- shortest hop first, then edge weight descending;
-- edge weight descending only;
-- edge-type priority, then weight;
-- source retrieval relevance plus graph weight.
+The policy is intentionally graph-local. It does not mix source retrieval
+relevance into related expansion ordering yet. That keeps direct get and recall
+related expansion predictable: related records are ordered by the relationship
+evidence, while primary search results remain ordered by retrieval relevance.
 
-Document and test the chosen policy.
+Future evaluation work can revisit this if real corpora show that recall should
+blend primary result relevance with edge weight. If that happens, document it
+as a new ranking policy change and add tests that distinguish direct-get graph
+ordering from recall-specific ranking.
 
 ### Remaining: Tool Schema Contract Tests
 

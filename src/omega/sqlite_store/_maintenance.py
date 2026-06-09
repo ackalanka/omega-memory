@@ -1006,7 +1006,9 @@ class MaintenanceMixin:
         """Traverse relationship edges from a starting memory up to max_hops.
 
         Returns a list of dicts with: node_id, content, hop, weight, edge_type.
-        Nodes are deduplicated (each appears at its shortest hop distance).
+        Nodes are deduplicated and ordered by nearest hop, strongest edge
+        weight, edge-type priority, newest edge timestamp, then stable node ID.
+        Each node appears at its shortest hop distance.
 
         Args:
             exclude_ids: Node IDs to skip during traversal.
@@ -1019,26 +1021,74 @@ class MaintenanceMixin:
         visited: Dict[str, Dict[str, Any]] = {}
         skip = set(exclude_ids) if exclude_ids else set()
         frontier = {start_id}
+        edge_type_priority = {
+            "supersedes": 0,
+            "contradicts": 1,
+            "evolves": 2,
+            "causal": 3,
+            "related": 4,
+            "derived_from": 5,
+        }
+
+        def _is_better_related_entry(candidate: Dict[str, Any], existing: Dict[str, Any]) -> bool:
+            """Return True when candidate should replace an already visited node."""
+            candidate_hop = int(candidate.get("hop") or 0)
+            existing_hop = int(existing.get("hop") or 0)
+            if candidate_hop != existing_hop:
+                return candidate_hop < existing_hop
+
+            candidate_weight = float(candidate.get("weight") or 0.0)
+            existing_weight = float(existing.get("weight") or 0.0)
+            if candidate_weight != existing_weight:
+                return candidate_weight > existing_weight
+
+            candidate_type = str(candidate.get("edge_type") or "")
+            existing_type = str(existing.get("edge_type") or "")
+            candidate_type_rank = edge_type_priority.get(candidate_type, 99)
+            existing_type_rank = edge_type_priority.get(existing_type, 99)
+            if candidate_type_rank != existing_type_rank:
+                return candidate_type_rank < existing_type_rank
+            if candidate_type != existing_type:
+                return candidate_type < existing_type
+
+            candidate_created_at = str(candidate.get("edge_created_at") or "")
+            existing_created_at = str(existing.get("edge_created_at") or "")
+            if candidate_created_at != existing_created_at:
+                return candidate_created_at > existing_created_at
+
+            return str(candidate.get("node_id") or "") < str(existing.get("node_id") or "")
 
         for hop in range(1, max_hops + 1):
             if not frontier:
                 break
             next_frontier: Set[str] = set()
-            for node_id in frontier:
+            for node_id in sorted(frontier):
                 # Query edges in both directions (undirected graph)
                 rows = self._conn.execute(
-                    """SELECT source_id, target_id, edge_type, weight
+                    """SELECT source_id, target_id, edge_type, weight, created_at
                        FROM edges
                        WHERE (source_id = ? OR target_id = ?)
-                       AND weight >= ?""",
+                       AND weight >= ?
+                       ORDER BY weight DESC, edge_type ASC, created_at DESC,
+                                source_id ASC, target_id ASC""",
                     (node_id, node_id, min_weight),
                 ).fetchall()
 
-                for source, target, etype, weight in rows:
+                for source, target, etype, weight, edge_created_at in rows:
                     neighbor = target if source == node_id else source
-                    if neighbor == start_id or neighbor in visited or neighbor in skip:
+                    if neighbor == start_id or neighbor in skip:
                         continue
                     if edge_types and etype not in edge_types:
+                        continue
+                    candidate_entry = {
+                        "node_id": neighbor,
+                        "hop": hop,
+                        "weight": weight,
+                        "edge_type": etype,
+                        "edge_created_at": edge_created_at or "",
+                    }
+                    existing_entry = visited.get(neighbor)
+                    if existing_entry and not _is_better_related_entry(candidate_entry, existing_entry):
                         continue
                     # Fetch the memory content
                     mem_row = self._conn.execute(
@@ -1051,15 +1101,12 @@ class MaintenanceMixin:
                         continue
 
                     result = self._row_to_result(mem_row)
-                    entry = {
-                        "node_id": neighbor,
+                    entry = dict(candidate_entry)
+                    entry.update({
                         "content": result.content,
                         "metadata": result.metadata,
                         "created_at": result.created_at.isoformat() if result.created_at else "",
-                        "hop": hop,
-                        "weight": weight,
-                        "edge_type": etype,
-                    }
+                    })
                     if _include_results:
                         entry["_result"] = result
                     visited[neighbor] = entry
@@ -1067,8 +1114,13 @@ class MaintenanceMixin:
 
             frontier = next_frontier
 
-        # Sort by hop (nearest first), then by weight (strongest first)
-        results = sorted(visited.values(), key=lambda x: (x["hop"], -x["weight"]))
+        results = list(visited.values())
+        results.sort(key=lambda x: str(x.get("node_id") or ""))
+        results.sort(key=lambda x: str(x.get("edge_created_at") or ""), reverse=True)
+        results.sort(key=lambda x: str(x.get("edge_type") or ""))
+        results.sort(key=lambda x: edge_type_priority.get(str(x.get("edge_type") or ""), 99))
+        results.sort(key=lambda x: -float(x.get("weight") or 0.0))
+        results.sort(key=lambda x: int(x.get("hop") or 0))
         return results
 
     # ------------------------------------------------------------------

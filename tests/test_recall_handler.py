@@ -193,3 +193,45 @@ class TestOmegaRecallOutput:
         assert related[0]["id"] == child_id
         assert related[0]["edge_type"] == "related"
         assert related[0]["content"] == child_text
+
+    @pytest.mark.asyncio
+    async def test_related_expansion_preserves_deterministic_related_order(self):
+        from omega.bridge import _get_store
+
+        parent_text = "Parent recall memory about deterministic graph ordering."
+        weak_text = "Weak recall related ordering target."
+        strong_text = "Strong recall related ordering target."
+        db = _get_store()
+        parent_id = db.store(
+            parent_text,
+            metadata={"event_type": "decision", "tags": ["related-order"]},
+            skip_inference=True,
+        )
+        weak_id = db.store(
+            weak_text,
+            metadata={"event_type": "memory", "tags": ["related-order"]},
+            skip_inference=True,
+        )
+        strong_id = db.store(
+            strong_text,
+            metadata={"event_type": "lesson_learned", "tags": ["related-order"]},
+            skip_inference=True,
+        )
+        db.add_edge(parent_id, weak_id, edge_type="related", weight=0.2)
+        db.add_edge(parent_id, strong_id, edge_type="supersedes", weight=0.9)
+
+        result = await handle_omega_recall({
+            "query": "deterministic graph ordering",
+            "limit": 1,
+            "format": "json",
+            "expand_related": True,
+            "max_related": 2,
+            "budget_chars": 5000,
+        })
+
+        assert not _is_error(result)
+        payload = json.loads(_text(result))
+        related = payload["results"][0].get("related", [])
+        assert [record["id"] for record in related] == [strong_id, weak_id]
+        assert [record["edge_type"] for record in related] == ["supersedes", "related"]
+        assert [record["weight"] for record in related] == [0.9, 0.2]

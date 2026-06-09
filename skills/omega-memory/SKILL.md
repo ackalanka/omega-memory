@@ -131,6 +131,9 @@ omega_recall("restore workflow decisions", profile="implementation", expand_rela
 
 Prefer `omega_recall` over chaining several broad queries when context is long.
 It returns the searches used, selected IDs, omitted IDs, and truncation status.
+When `expand_related=true`, related memories are ordered deterministically by
+nearest hop, strongest edge weight, edge-type priority, newest edge timestamp,
+then stable memory ID.
 
 ### Direct Memory Hydration
 
@@ -149,6 +152,14 @@ Set `track_access=false` for audits or tests. Use `content_mode="preview"` or
 `content_mode="none"` when you only need metadata. For batch hydration or
 edge expansion, set `budget_chars` to cap full content and inspect the returned
 truncated/omitted ID lists before acting.
+
+Use `include_edges=true` when an exact memory ID needs adjacent context such as
+superseding decisions, contradicting lessons, causal predecessors, or derived
+records. Related records preserve the store-level `node_id` and also expose
+`id` for consistency with `omega_recall`. The related order is deterministic:
+nearest hop first, strongest edge weight, edge-type priority (`supersedes`,
+`contradicts`, `evolves`, `causal`, `related`, `derived_from`, then unknown
+types), newest edge timestamp, then stable memory ID.
 
 ### Project Context Packs
 

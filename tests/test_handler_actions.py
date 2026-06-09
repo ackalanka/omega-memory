@@ -274,6 +274,44 @@ class TestOmegaMemoryGet:
         assert child_id in markdown_result["content"][0]["text"]
 
     @pytest.mark.asyncio
+    async def test_get_include_edges_preserves_deterministic_related_order(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store(
+            "Parent memory for ordered direct edge hydration.",
+            metadata={"event_type": "decision"},
+            skip_inference=True,
+        )
+        weak_id = store.store(
+            "Weak direct related memory.",
+            metadata={"event_type": "memory"},
+            skip_inference=True,
+        )
+        strong_id = store.store(
+            "Strong direct related memory.",
+            metadata={"event_type": "lesson_learned"},
+            skip_inference=True,
+        )
+
+        store.add_edge(parent_id, weak_id, edge_type="related", weight=0.2)
+        store.add_edge(parent_id, strong_id, edge_type="supersedes", weight=0.9)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "max_related": 2,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        related = payload["record"]["related"]
+        assert [record["id"] for record in related] == [strong_id, weak_id]
+        assert [record["edge_type"] for record in related] == ["supersedes", "related"]
+        assert [record["weight"] for record in related] == [0.9, 0.2]
+
+    @pytest.mark.asyncio
     async def test_get_include_edges_respects_include_metadata_false(self, mock_get_store):
         store = mock_get_store
         parent_id = store.store("Parent related metadata toggle.", metadata={"event_type": "decision"})
