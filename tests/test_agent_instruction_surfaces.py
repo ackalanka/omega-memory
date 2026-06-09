@@ -1,5 +1,10 @@
 """Regression tests for agent-facing MCP retrieval guidance."""
 
+import importlib.resources
+
+import pytest
+
+from omega.server.handlers import handle_omega_protocol
 from omega.server import mcp_server
 from omega.server.tool_schemas import CONDENSED_TOOL_SCHEMAS, TOOL_SCHEMAS
 
@@ -45,3 +50,32 @@ def test_condensed_meta_tools_point_to_discovery_then_call():
     assert "full schema" in meta["omega_tools"]["description"]
     assert "Use omega_tools() first" in meta["omega_call"]["description"]
     assert "omega_recall" in meta["omega_call"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_free_protocol_fallback_teaches_retrieval_workflow():
+    """omega_protocol Free fallback is a startup instruction surface too."""
+    result = await handle_omega_protocol({"project": "/tmp/omega-instruction-test"})
+
+    assert not result.get("isError")
+    text = result["content"][0]["text"]
+    assert "omega_context" in text
+    assert "omega_recall" in text
+    assert "omega_memory(action=\"get\"" in text
+    assert "omega_query(format=\"json\"" in text
+    assert "omega_tools" in text
+    assert "omega_call" in text
+    assert "Call `omega_query()` before non-trivial tasks" not in text
+
+
+def test_claude_setup_fragments_teach_retrieval_workflow():
+    """Managed client fragments should not regress to preview-only query advice."""
+    for filename in ("claude-md-fragment.md", "claude-md-fragment-pro.md"):
+        text = importlib.resources.files("omega.data").joinpath(filename).read_text()
+        assert "omega_context" in text
+        assert "omega_recall" in text
+        assert "omega_memory(action=\"get\"" in text
+        assert "omega_query(format=\"json\"" in text
+        assert "omega_tools" in text
+        assert "omega_call" in text
+        assert "Before non-trivial tasks: `omega_query()`" not in text

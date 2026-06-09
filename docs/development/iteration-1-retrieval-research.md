@@ -28,10 +28,10 @@ Implementation progress:
   markdown/JSON output, content controls, lifecycle status filters, and an
   optional focused query section.
 - Agent-facing retrieval guidance is maintained as part of Iteration 1:
-  MCP startup instructions, condensed-mode meta-tool descriptions, and
-  `skills/omega-memory/SKILL.md` teach the long-context workflow from
-  `omega_context` and `omega_recall` through structured/full `omega_query` and
-  `omega_memory(action="get")`.
+  MCP startup instructions, `omega_protocol`, managed client setup fragments,
+  condensed-mode meta-tool descriptions, and `skills/omega-memory/SKILL.md`
+  teach the long-context workflow from `omega_context` and `omega_recall`
+  through structured/full `omega_query` and `omega_memory(action="get")`.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -560,9 +560,9 @@ Focused unit/integration tests:
 - related expansion includes hop/edge metadata and respects `max_related`.
 - `omega_context` returns project-scoped handoff/planning/debug packs with
   stable memory IDs.
-- MCP startup instructions, condensed-mode schema text, and the
-  `omega-memory` skill explain how agents discover and use the retrieval
-  tools.
+- MCP startup instructions, `omega_protocol`, managed client setup fragments,
+  condensed-mode schema text, and the `omega-memory` skill explain how agents
+  discover and use the retrieval tools.
 
 Existing checks to run after implementation:
 
@@ -605,8 +605,8 @@ Iteration 1 is acceptable when a zero-context agent can:
 4. run one recall call that returns a budgeted, prompt-ready block;
 5. browse memory classes with pagination;
 6. optionally expand related memories;
-7. learn the workflow from MCP instructions, tool schemas, and the
-   `omega-memory` skill without chat history;
+7. learn the workflow from MCP instructions, `omega_protocol`, managed client
+   fragments, tool schemas, and the `omega-memory` skill without chat history;
 8. do all of the above against the isolated dev OMEGA home in tests.
 
 ## Summary Recommendation
