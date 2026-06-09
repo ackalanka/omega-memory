@@ -271,9 +271,10 @@ Why fifth:
 
 Priority: P1.
 
-Status: partially started. `omega_memory(action="get")` supports
-`include_edges`, `max_related`, and `edge_types`; `omega_recall` now supports
-`expand_related`, `max_related`, and `edge_types` with the same output budget.
+Status: implemented for the Iteration 1 target surfaces.
+`omega_memory(action="get")` supports `include_edges`, `max_related`, and
+`edge_types`; `omega_recall` supports `expand_related`, `max_related`, and
+`edge_types` with the same output budget.
 
 Add optional graph expansion to `omega_memory(action="get")` and `omega_recall`.
 
@@ -299,6 +300,9 @@ Why sixth:
 ### R7. Project Context Pack
 
 Priority: P2.
+
+Status: implemented in the current development slice; verify before promotion
+with `tests/test_context_handler.py` plus schema/handler compatibility tests.
 
 Add a focused project briefing tool.
 
@@ -326,6 +330,8 @@ Expected behavior:
 - Return a compact, cited context pack.
 - Prefer current active memories over stale historical entries.
 - Include IDs for every memory so agents can fetch full records.
+- Support markdown or JSON output, preview/full/none content modes, per-type
+  limits, lifecycle status filtering, and optional focused query sections.
 
 Why later in iteration 1:
 

@@ -439,6 +439,35 @@ class SearchMixin:
         ).fetchall()
         return [self._row_to_result(row) for row in rows]
 
+    def get_by_project(
+        self,
+        project: str,
+        limit: int = 100,
+        event_type: Optional[str] = None,
+        offset: int = 0,
+        status: Optional[str] = "active",
+    ) -> List[MemoryResult]:
+        """Get project-scoped memories, optionally filtered by event type/status."""
+        offset = max(0, int(offset or 0))
+        filters = ["project = ?"]
+        params: List[Any] = [project]
+        if event_type:
+            filters.append("event_type = ?")
+            params.append(event_type)
+        if status:
+            filters.append("status = ?")
+            params.append(status)
+        params.extend([limit, offset])
+        rows = self._conn.execute(
+            f"""SELECT node_id, content, metadata, created_at,
+                      access_count, last_accessed, ttl_seconds,
+                      valid_from, valid_until, derived_from, source_uri, status
+               FROM memories WHERE {' AND '.join(filters)}
+               ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            tuple(params),
+        ).fetchall()
+        return [self._row_to_result(row) for row in rows]
+
     def query_by_type(
         self,
         query: str,

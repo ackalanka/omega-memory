@@ -21,6 +21,11 @@ Implementation progress:
   `omega_query(mode="browse")` preserves default markdown previews while
   adding SQL-backed `offset`, JSON output, `content_mode`, `preview_chars`,
   `include_metadata`, and full-content budget reporting.
+- Project context packs implemented in the current development slice:
+  `omega_context` assembles deterministic project-scoped handoff/planning/debug
+  sections from recent typed memories, includes stable IDs, supports
+  markdown/JSON output, content controls, lifecycle status filters, and an
+  optional focused query section.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -424,6 +429,9 @@ Implementation direction:
 - include hop, edge type, edge weight, and content;
 - respect edge filters and output budget.
 
+Implementation status: completed for the Iteration 1 target surfaces,
+`omega_memory(action="get")` and `omega_recall`.
+
 ### P1. Retrieval profile definitions as code, not hard-coded prose
 
 Purpose: profiles should become transparent reusable retrieval plans.
@@ -438,6 +446,51 @@ Implementation direction:
 - output the profile plan used.
 
 This keeps the feature inspectable and easy to improve later.
+
+Implementation status: completed in `src/omega/server/retrieval_profiles.py`.
+
+### P2. Project context pack
+
+Implementation status: implemented in the current development slice.
+
+Purpose: provide a deterministic project briefing when agents do not yet know
+which exact memory to search for.
+
+Schema:
+
+- `project`;
+- `mode`: `handoff`, `planning`, or `debug`;
+- `query`: optional focused query section;
+- `limit_per_type`;
+- `budget_chars`;
+- `content_mode`;
+- `preview_chars`;
+- `format`;
+- `include_metadata`;
+- `status`.
+
+Return contract:
+
+- markdown mode returns a compact context pack with cited memory IDs;
+- JSON mode returns `sections`, `items`, `event_types`, `filters`, and content
+  budget/truncation metadata;
+- project scoping uses exact project metadata/DB column matches for the typed
+  sections;
+- optional focused query sections use existing structured query retrieval and
+  dedupe against already included IDs.
+
+Verified behavior in this slice:
+
+- `omega_context` is a first-class MCP schema and handler in the `query`
+  category;
+- handoff mode includes project-scoped checkpoints, completions, status,
+  constraints, lessons, and decisions;
+- planning mode includes decisions, constraints, preferences, completions,
+  checkpoints, and lessons;
+- debug mode includes errors, lessons, constraints, decisions, checkpoints,
+  completions, and optional focused query results;
+- JSON output includes stable IDs, sections, metadata when requested, status
+  filtering, and content budget/truncation metadata.
 
 ## Deferred But Kept Open
 
@@ -479,6 +532,8 @@ most natural expansions.
    `tests/test_browse_structured_output.py`.
 10. Add related expansion to get/recall. Completed for `get` and `recall`;
     browse remains separate.
+11. Add project context pack. Completed in current development slice and
+    covered by `tests/test_context_handler.py`.
 
 ## Test Plan
 
@@ -497,6 +552,8 @@ Focused unit/integration tests:
 - retrieval profiles are transparent and dedupe overlapping results.
 - browse pagination returns stable `next_offset`/`has_more`.
 - related expansion includes hop/edge metadata and respects `max_related`.
+- `omega_context` returns project-scoped handoff/planning/debug packs with
+  stable memory IDs.
 
 Existing checks to run after implementation:
 

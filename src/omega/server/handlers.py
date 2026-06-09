@@ -762,6 +762,169 @@ def _format_recall_context(
     return "\n".join(lines).rstrip()
 
 
+_CONTEXT_MODE_EVENT_TYPES = {
+    "handoff": (
+        "checkpoint",
+        "task_completion",
+        "project_status",
+        "constraint",
+        "lesson_learned",
+        "decision",
+    ),
+    "planning": (
+        "decision",
+        "constraint",
+        "user_preference",
+        "task_completion",
+        "checkpoint",
+        "lesson_learned",
+    ),
+    "debug": (
+        "error_pattern",
+        "lesson_learned",
+        "constraint",
+        "decision",
+        "checkpoint",
+        "task_completion",
+    ),
+}
+
+_CONTEXT_MODE_DESCRIPTIONS = {
+    "handoff": "latest checkpoints, completions, project status, constraints, lessons, and decisions",
+    "planning": "decisions, constraints, preferences, completions, checkpoints, and lessons",
+    "debug": "error patterns, lessons, constraints, decisions, checkpoints, and recent completions",
+}
+
+
+def _context_section_title(event_type: str) -> str:
+    """Human-readable section title for context-pack event types."""
+    return {
+        "checkpoint": "Checkpoints",
+        "task_completion": "Task Completions",
+        "project_status": "Project Status",
+        "constraint": "Constraints",
+        "lesson_learned": "Lessons Learned",
+        "decision": "Decisions",
+        "user_preference": "User Preferences",
+        "error_pattern": "Error Patterns",
+    }.get(event_type, event_type.replace("_", " ").title())
+
+
+def _dedupe_context_records(records: list[dict]) -> list[dict]:
+    """Dedupe context pack records while preserving first occurrence order."""
+    seen = set()
+    deduped = []
+    for record in records:
+        record_id = record.get("id")
+        if not record_id or record_id in seen:
+            continue
+        seen.add(record_id)
+        deduped.append(record)
+    return deduped
+
+
+def _apply_context_record_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    remaining_chars: int,
+) -> tuple[list[dict], dict, int]:
+    """Apply context-pack content mode with a shared remaining budget."""
+    remaining = max(0, remaining_chars)
+    budget_used = 0
+    truncated_ids = []
+    omitted_ids = []
+    controlled = []
+
+    for raw in records:
+        record = dict(raw)
+        original_content = str(record.get("content") or "")
+        record["content_length"] = len(original_content)
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+            controlled.append(record)
+            continue
+
+        target_content = original_content
+        if content_mode == "preview" and len(original_content) > preview_chars:
+            target_content = original_content[:preview_chars]
+            record["content_truncated"] = True
+            truncated_ids.append(record["id"])
+
+        if remaining <= 0:
+            record["content"] = ""
+            record["content_truncated"] = True
+            record["content_omitted_due_to_budget"] = True
+            omitted_ids.append(record["id"])
+        elif len(target_content) > remaining:
+            record["content"] = target_content[:remaining]
+            record["content_truncated"] = True
+            record["budget_truncated"] = True
+            truncated_ids.append(record["id"])
+            budget_used += remaining
+            remaining = 0
+        else:
+            record["content"] = target_content
+            budget_used += len(target_content)
+            remaining -= len(target_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_ids),
+    }, remaining
+
+
+def _format_context_pack_markdown(payload: dict) -> str:
+    """Render an omega_context payload as compact markdown."""
+    lines = [
+        f"# OMEGA Context: {payload['project']}",
+        f"Mode: {payload['mode']} -- {payload['description']}",
+        f"Items: {payload['item_count']} | Budget: {payload['content']['content_budget_used']}/{payload['content']['budget_chars']} chars",
+        "",
+    ]
+    if payload.get("query"):
+        lines.append(f"Focused query: {payload['query']}")
+        lines.append("")
+
+    if not payload["sections"]:
+        lines.append("*No project-scoped memories found.*")
+        return "\n".join(lines)
+
+    for section in payload["sections"]:
+        lines.append(f"## {section['title']} ({len(section['items'])})")
+        if not section["items"]:
+            lines.append("*No matching memories.*")
+            lines.append("")
+            continue
+        for item in section["items"]:
+            created = item.get("created_at") or ""
+            status = item.get("status") or "active"
+            status_part = f" status={status}" if status != "active" else ""
+            lines.append(f"- `{item.get('id')}` [{item.get('event_type')}] {created}{status_part}")
+            if item.get("content"):
+                content = str(item["content"]).replace("\n", "\n  ")
+                lines.append(f"  {content}")
+            if item.get("content_truncated"):
+                lines.append(f"  *Content truncated from {item.get('content_length', 0)} characters.*")
+        lines.append("")
+
+    content = payload["content"]
+    if content.get("content_omitted_ids"):
+        lines.append("Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in content["content_omitted_ids"]))
+    if content.get("content_truncated_ids"):
+        lines.append("Content truncated: " + ", ".join(f"`{rid}`" for rid in content["content_truncated_ids"]))
+    return "\n".join(lines).rstrip()
+
+
 # ---------------------------------------------------------------------------
 # Post-write validation guard (arxiv 2602.19320 §5.2 — backbone resilience)
 # ---------------------------------------------------------------------------
@@ -1637,6 +1800,175 @@ async def handle_omega_recall(arguments: dict) -> dict:
     except Exception as e:
         logger.error("omega_recall failed: %s", e, exc_info=True)
         return mcp_error(f"Recall failed: {e}")
+
+
+# ============================================================================
+# Handler: omega_context
+# ============================================================================
+
+
+async def handle_omega_context(arguments: dict) -> dict:
+    """Build a compact project-scoped memory context pack."""
+    project = arguments.get("project") or os.getcwd()
+    mode = arguments.get("mode", "handoff")
+    if mode not in _CONTEXT_MODE_EVENT_TYPES:
+        return mcp_error("mode must be one of: handoff, planning, debug")
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+
+    limit_per_type = _clamp_int(arguments.get("limit_per_type", 3), default=3, min_val=1, max_val=20)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 12000), default=12000, min_val=0, max_val=200000)
+    preview_chars = _clamp_int(arguments.get("preview_chars", 700), default=700, min_val=0, max_val=10000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    status_filter = arguments.get("status", "active")
+    query_text = (arguments.get("query") or "").strip()
+
+    try:
+        from omega.bridge import _get_store, query_structured
+
+        db = _get_store()
+        event_types = _CONTEXT_MODE_EVENT_TYPES[mode]
+        sections_raw: list[dict] = []
+        all_nodes: list[Any] = []
+        seen_ids: set[str] = set()
+
+        for event_type in event_types:
+            nodes = db.get_by_project(
+                project,
+                event_type=event_type,
+                limit=limit_per_type,
+                status=status_filter,
+            )
+            deduped_nodes = []
+            for node in nodes:
+                if node.id in seen_ids:
+                    continue
+                seen_ids.add(node.id)
+                deduped_nodes.append(node)
+                all_nodes.append(node)
+            sections_raw.append({
+                "kind": "event_type",
+                "event_type": event_type,
+                "title": _context_section_title(event_type),
+                "nodes": deduped_nodes,
+            })
+
+        focused_records: list[dict] = []
+        if query_text:
+            focus_event_types = ("constraint", "decision", "lesson_learned", "error_pattern", "checkpoint")
+            focused_candidates: list[dict] = []
+            focus_seen_ids: set[str] = set()
+            for event_type in focus_event_types:
+                focused_candidates.extend(
+                    query_structured(
+                        query_text=query_text,
+                        event_type=event_type,
+                        project=project,
+                        limit=limit_per_type,
+                        scope="project",
+                        include_constraints=False,
+                        include_preferences=False,
+                        status=status_filter,
+                    )
+                )
+            for raw in focused_candidates:
+                record = _query_record_base(raw, include_metadata=bool(include_metadata))
+                if record.get("project") != project:
+                    continue
+                record_id = record.get("id")
+                if not record_id or record_id in focus_seen_ids:
+                    continue
+                focus_seen_ids.add(record_id)
+                record["already_in_context"] = record_id in seen_ids
+                focused_records.append(record)
+            focused_records = _dedupe_context_records(focused_records)[:limit_per_type]
+
+        raw_records = [
+            _memory_result_to_dict(
+                node,
+                include_metadata=bool(include_metadata),
+                content_mode="full",
+                preview_chars=preview_chars,
+            )
+            for node in all_nodes
+        ]
+        records, content_meta, remaining_budget = _apply_context_record_content_controls(
+            raw_records,
+            content_mode=content_mode,
+            preview_chars=preview_chars,
+            remaining_chars=budget_chars,
+        )
+        record_by_id = {record["id"]: record for record in records}
+        if focused_records:
+            focused_records, focus_content_meta, _remaining_budget = _apply_context_record_content_controls(
+                focused_records,
+                content_mode=content_mode,
+                preview_chars=preview_chars,
+                remaining_chars=remaining_budget,
+            )
+        else:
+            focus_content_meta = {
+                "content_budget_used": 0,
+                "content_truncated_ids": [],
+                "content_omitted_ids": [],
+                "content_truncated": False,
+            }
+
+        sections = []
+        for raw_section in sections_raw:
+            items = [record_by_id[node.id] for node in raw_section["nodes"] if node.id in record_by_id]
+            sections.append({
+                "kind": raw_section["kind"],
+                "event_type": raw_section["event_type"],
+                "title": raw_section["title"],
+                "items": items,
+            })
+        if focused_records:
+            sections.insert(0, {
+                "kind": "focused_query",
+                "event_type": None,
+                "title": f"Focused Query: {query_text}",
+                "items": focused_records,
+            })
+
+        combined_content_meta = {
+            "content_mode": content_mode,
+            "preview_chars": preview_chars if content_mode == "preview" else None,
+            "budget_chars": budget_chars if content_mode == "full" else budget_chars,
+            "content_budget_used": content_meta["content_budget_used"] + focus_content_meta["content_budget_used"],
+            "content_truncated_ids": content_meta["content_truncated_ids"] + focus_content_meta["content_truncated_ids"],
+            "content_omitted_ids": content_meta["content_omitted_ids"] + focus_content_meta["content_omitted_ids"],
+            "content_truncated": bool(content_meta["content_truncated"] or focus_content_meta["content_truncated"]),
+        }
+        item_count = sum(len(section["items"]) for section in sections)
+        payload = {
+            "mode": mode,
+            "project": project,
+            "description": _CONTEXT_MODE_DESCRIPTIONS[mode],
+            "query": query_text or None,
+            "sections": sections,
+            "item_count": item_count,
+            "limit_per_type": limit_per_type,
+            "event_types": list(event_types),
+            "filters": {
+                "project": project,
+                "status": status_filter,
+            },
+            "content": combined_content_meta,
+        }
+
+        if output_format == "json":
+            return mcp_response(json.dumps(payload, indent=2))
+        return mcp_response(_format_context_pack_markdown(payload))
+    except Exception as e:
+        logger.error("omega_context failed: %s", e, exc_info=True)
+        return mcp_error(f"Context pack failed: {e}")
 
 
 # ============================================================================
@@ -4417,10 +4749,11 @@ async def handle_omega_call(args: Dict[str, Any]) -> dict:
 # ============================================================================
 
 HANDLERS: Dict[str, Any] = {
-    # === 16 consolidated tools (omega_lessons removed — auto-surfaced via hooks) ===
+    # === 17 consolidated tools (omega_lessons removed — auto-surfaced via hooks) ===
     "omega_store": handle_omega_store,
     "omega_query": handle_omega_query,
     "omega_recall": handle_omega_recall,
+    "omega_context": handle_omega_context,
     "omega_welcome": handle_omega_welcome,
     "omega_protocol": handle_omega_protocol,
     "omega_checkpoint": handle_omega_checkpoint,

@@ -1,6 +1,6 @@
-"""OMEGA MCP Tool Schemas -- 16 tools for memory management.
+"""OMEGA MCP Tool Schemas -- 17 tools for memory management.
 
-Consolidated into 16 action-discriminated composites.
+Consolidated into 17 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
 omega_briefing and omega_habits remain as backward-compat aliases in handlers.
 omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
@@ -211,6 +211,40 @@ TOOL_SCHEMAS = [
                 "include_metadata": {"type": "boolean", "description": "Include full metadata in JSON result records. Defaults true for JSON, false for markdown."},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "omega_context",
+        "description": "Build a compact project-scoped context pack from recent checkpoints, completions, lessons, decisions, constraints, and optional focused recall. Use at handoff/planning/debug start when an agent needs project memory orientation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Project path to scope the context pack. Defaults to current working directory."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["handoff", "planning", "debug"],
+                    "description": "Context pack intent.",
+                    "default": "handoff",
+                },
+                "query": {"type": "string", "description": "Optional focused query to add a relevance-ranked section."},
+                "limit_per_type": {"type": "integer", "description": "Max memories per event-type section.", "default": 3},
+                "budget_chars": {"type": "integer", "description": "Total character budget for memory snippets/content.", "default": 12000},
+                "content_mode": {
+                    "type": "string",
+                    "enum": ["preview", "full", "none"],
+                    "description": "Memory content shape inside the context pack.",
+                    "default": "preview",
+                },
+                "preview_chars": {"type": "integer", "description": "Preview character limit per item when content_mode='preview'.", "default": 700},
+                "include_metadata": {"type": "boolean", "description": "Include full metadata in JSON item records. Defaults true for JSON, false for markdown."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format.", "default": "markdown"},
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Lifecycle status filter. Defaults to active.",
+                    "default": "active",
+                },
+            },
         },
     },
     {
@@ -529,6 +563,7 @@ TOOL_CATEGORIES = {
     "omega_store": "memory",
     "omega_query": "query",
     "omega_recall": "query",
+    "omega_context": "query",
     "omega_welcome": "session",
     "omega_protocol": "session",
     "omega_checkpoint": "memory",
