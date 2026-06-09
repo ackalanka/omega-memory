@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from omega import json_compat as json
+
 logger = logging.getLogger("omega.server.handlers")
 
 # ---------------------------------------------------------------------------
@@ -217,6 +219,127 @@ def _validate_entity_id(entity_id: str | None) -> str | None:
 
 
 from omega.server.responses import mcp_response, mcp_error  # noqa: E402
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """Return ISO text for datetimes while leaving missing values as None."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _content_payload(content: str, mode: str, preview_chars: int) -> tuple[str | None, bool]:
+    """Return content according to full/preview/none mode plus truncation state."""
+    if mode == "none":
+        return None, False
+    if mode == "preview" and len(content) > preview_chars:
+        return content[:preview_chars], True
+    return content, False
+
+
+def _memory_result_to_dict(
+    node: Any,
+    *,
+    include_metadata: bool = True,
+    content_mode: str = "full",
+    preview_chars: int = 800,
+) -> dict:
+    """Convert MemoryResult-like objects to a stable MCP retrieval payload."""
+    metadata = dict(getattr(node, "metadata", None) or {})
+    content = getattr(node, "content", "") or ""
+    rendered_content, truncated = _content_payload(content, content_mode, preview_chars)
+    event_type = metadata.get("event_type") or metadata.get("type") or "memory"
+
+    payload = {
+        "id": getattr(node, "id", ""),
+        "content": rendered_content,
+        "content_mode": content_mode,
+        "content_length": len(content),
+        "content_truncated": truncated,
+        "event_type": event_type,
+        "created_at": _iso_or_none(getattr(node, "created_at", None)),
+        "updated_at": metadata.get("updated_at"),
+        "session_id": metadata.get("session_id"),
+        "project": metadata.get("project"),
+        "entity_id": metadata.get("entity_id"),
+        "agent_type": metadata.get("agent_type"),
+        "tags": metadata.get("tags", []),
+        "status": getattr(node, "status", None) or metadata.get("status", "active"),
+        "source_uri": getattr(node, "source_uri", None) or metadata.get("source_uri"),
+        "derived_from": getattr(node, "derived_from", None) or metadata.get("derived_from"),
+        "strength": getattr(node, "strength", 0.0),
+        "relevance": getattr(node, "relevance", 0.0),
+        "access_count": getattr(node, "access_count", 0),
+        "last_accessed": _iso_or_none(getattr(node, "last_accessed", None)),
+        "valid_from": _iso_or_none(getattr(node, "valid_from", None)),
+        "valid_until": _iso_or_none(getattr(node, "valid_until", None)),
+        "ttl_seconds": getattr(node, "ttl_seconds", None),
+    }
+    if include_metadata:
+        payload["metadata"] = metadata
+    return payload
+
+
+def _format_memory_record_markdown(record: dict, index: int | None = None) -> str:
+    """Render a memory retrieval record as compact markdown."""
+    prefix = f"## {index}. " if index is not None else "## "
+    lines = [f"{prefix}[{record.get('event_type', 'memory')}] `{record.get('id', '')}`"]
+    status = record.get("status")
+    if status and status != "active":
+        lines.append(f"Status: {status}")
+    for key, label in (
+        ("created_at", "Created"),
+        ("last_accessed", "Last accessed"),
+        ("project", "Project"),
+        ("session_id", "Session"),
+        ("entity_id", "Entity"),
+        ("agent_type", "Agent type"),
+        ("source_uri", "Source"),
+        ("derived_from", "Derived from"),
+        ("valid_from", "Valid from"),
+        ("valid_until", "Valid until"),
+    ):
+        value = record.get(key)
+        if value:
+            lines.append(f"{label}: {value}")
+    tags = record.get("tags") or []
+    if tags:
+        lines.append("Tags: " + ", ".join(str(tag) for tag in tags))
+    lines.append(
+        f"Access count: {record.get('access_count', 0)} | "
+        f"Content length: {record.get('content_length', 0)}"
+    )
+    if "metadata" in record and record["metadata"]:
+        metadata_summary = {
+            k: v
+            for k, v in record["metadata"].items()
+            if k not in {"event_type", "session_id", "project", "entity_id", "agent_type", "tags"}
+        }
+        if metadata_summary:
+            lines.append("Metadata: " + json.dumps(metadata_summary, sort_keys=True))
+    if record.get("content") is not None:
+        lines.append("")
+        lines.append(str(record.get("content", "")))
+        if record.get("content_truncated"):
+            lines.append("")
+            lines.append(
+                f"*Content truncated to {len(record.get('content') or '')} "
+                f"of {record.get('content_length', 0)} characters.*"
+            )
+    if record.get("related"):
+        lines.append("")
+        lines.append("Related:")
+        for related in record["related"]:
+            rel_content = related.get("content", "")
+            if len(rel_content) > 160:
+                rel_content = rel_content[:160] + "..."
+            lines.append(
+                f"- `{related.get('node_id')}` hop={related.get('hop')} "
+                f"type={related.get('edge_type')} weight={related.get('weight')}: {rel_content}"
+            )
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -1137,6 +1260,110 @@ async def handle_omega_edit_memory(arguments: dict) -> dict:
     except Exception as e:
         logger.error("omega_edit_memory failed: %s", e, exc_info=True)
         return mcp_error("Edit failed")
+
+
+# ============================================================================
+# Handler: omega_get_memory
+# ============================================================================
+
+
+async def handle_omega_get_memory(arguments: dict) -> dict:
+    """Fetch one or more full memory records by stable ID."""
+    memory_ids = arguments.get("memory_ids")
+    single_id = (arguments.get("memory_id") or "").strip()
+
+    if memory_ids is None:
+        if not single_id:
+            return mcp_error("memory_id or memory_ids is required")
+        ids = [single_id]
+        single = True
+    else:
+        if not isinstance(memory_ids, list):
+            return mcp_error("memory_ids must be a list")
+        ids = [str(mid).strip() for mid in memory_ids if str(mid).strip()]
+        if single_id:
+            ids.insert(0, single_id)
+        single = len(ids) == 1
+
+    if not ids:
+        return mcp_error("memory_id or memory_ids is required")
+    if len(ids) > 50:
+        return mcp_error("action='get' supports at most 50 memory IDs per call")
+
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+
+    content_mode = arguments.get("content_mode", "full")
+    if content_mode not in ("full", "preview", "none"):
+        return mcp_error("content_mode must be one of: full, preview, none")
+
+    include_metadata = arguments.get("include_metadata", True)
+    include_edges = arguments.get("include_edges", False)
+    track_access = arguments.get("track_access", True)
+    preview_chars = _clamp_int(arguments.get("preview_chars", 800), default=800, min_val=1, max_val=20000)
+    max_related = _clamp_int(arguments.get("max_related", 10), default=10, min_val=0, max_val=50)
+    edge_types = arguments.get("edge_types")
+    if edge_types is not None and not isinstance(edge_types, list):
+        return mcp_error("edge_types must be a list")
+
+    try:
+        from omega.bridge import _get_store
+
+        db = _get_store()
+        records = []
+        not_found = []
+        for memory_id in ids:
+            node = db.get_node(memory_id, track_access=bool(track_access))
+            if node is None:
+                not_found.append(memory_id)
+                continue
+            record = _memory_result_to_dict(
+                node,
+                include_metadata=bool(include_metadata),
+                content_mode=content_mode,
+                preview_chars=preview_chars,
+            )
+            if include_edges and max_related > 0 and hasattr(db, "get_related_chain"):
+                related = db.get_related_chain(
+                    memory_id,
+                    max_hops=1,
+                    edge_types=edge_types,
+                    exclude_ids=set(ids),
+                )
+                record["related"] = related[:max_related]
+            records.append(record)
+
+        if single and not records:
+            return mcp_error(f"Memory `{ids[0]}` not found")
+
+        payload = {
+            "action": "get",
+            "count": len(records),
+            "records": records,
+            "not_found": not_found,
+        }
+        if single:
+            payload["record"] = records[0]
+
+        if output_format == "json":
+            return mcp_response(json.dumps(payload, indent=2))
+
+        if single:
+            return mcp_response(_format_memory_record_markdown(records[0]))
+
+        lines = [f"# Memories ({len(records)} found"]
+        if not_found:
+            lines[0] += f", {len(not_found)} not found"
+        lines[0] += ")"
+        if not_found:
+            lines.extend(["", "Not found: " + ", ".join(f"`{mid}`" for mid in not_found)])
+        for i, record in enumerate(records, 1):
+            lines.extend(["", _format_memory_record_markdown(record, index=i)])
+        return mcp_response("\n".join(lines))
+    except Exception as e:
+        logger.error("omega_get_memory failed: %s", e, exc_info=True)
+        return mcp_error(f"Get failed: {e}")
 
 
 # ============================================================================
@@ -2280,7 +2507,7 @@ async def handle_omega_supersede_memory(arguments: dict) -> dict:
 
 
 # ============================================================================
-# Composite Handler: omega_memory (edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede)
+# Composite Handler: omega_memory (get, edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede)
 # ============================================================================
 
 
@@ -2288,7 +2515,9 @@ async def handle_omega_memory(arguments: dict) -> dict:
     """Route omega_memory actions to existing handlers."""
     action = arguments.get("action", "").strip()
 
-    if action == "edit":
+    if action == "get":
+        return await handle_omega_get_memory(arguments)
+    elif action == "edit":
         return await handle_omega_edit_memory(arguments)
     elif action == "delete":
         return await handle_omega_delete_memory(arguments)
@@ -2307,7 +2536,7 @@ async def handle_omega_memory(arguments: dict) -> dict:
     elif action == "supersede":
         return await handle_omega_supersede_memory(arguments)
     else:
-        return mcp_error(f"Unknown omega_memory action: {action}. Use: edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede")
+        return mcp_error(f"Unknown omega_memory action: {action}. Use: get, edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede")
 
 
 # ============================================================================

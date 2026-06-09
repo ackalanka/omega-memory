@@ -555,14 +555,36 @@ class SQLiteStoreBase:
     def _row_to_result(self, row: tuple) -> MemoryResult:
         """Convert a database row to a MemoryResult.
 
-        Accepts 7-element rows (standard) or 9-element rows (with valid_from, valid_until).
+        Accepts 7-element rows (standard), 9-element rows (with valid_from,
+        valid_until), or 12-element rows (with context graph columns).
         """
-        if len(row) >= 9:
+        if len(row) >= 12:
+            (
+                node_id,
+                content,
+                metadata_json,
+                created_at,
+                access_count,
+                last_accessed,
+                ttl_seconds,
+                vf,
+                vu,
+                derived_from_col,
+                source_uri_col,
+                status_col,
+            ) = row[:12]
+        elif len(row) >= 9:
             node_id, content, metadata_json, created_at, access_count, last_accessed, ttl_seconds, vf, vu = row[:9]
+            derived_from_col = None
+            source_uri_col = None
+            status_col = None
         else:
             node_id, content, metadata_json, created_at, access_count, last_accessed, ttl_seconds = row[:7]
             vf = None
             vu = None
+            derived_from_col = None
+            source_uri_col = None
+            status_col = None
 
         meta = json.loads(metadata_json) if metadata_json else {}
 
@@ -581,9 +603,9 @@ class SQLiteStoreBase:
             ttl_seconds=ttl_seconds,
             valid_from=valid_from_dt,
             valid_until=valid_until_dt,
-            derived_from=meta.get("derived_from"),
-            source_uri=meta.get("source_uri"),
-            status=meta.get("status", "active"),
+            derived_from=derived_from_col or meta.get("derived_from"),
+            source_uri=source_uri_col or meta.get("source_uri"),
+            status=status_col or meta.get("status", "active"),
         )
 
     @staticmethod

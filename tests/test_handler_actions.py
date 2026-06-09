@@ -2,6 +2,7 @@
 
 Covers:
   - handle_omega_reflect: pro-only module graceful fallback
+  - omega_memory action=get: direct full record hydration
   - omega_memory action=link: manual edge creation
   - omega_memory action=flagged: flagged memory listing
   - omega_memory action=supersede: manual supersession
@@ -10,6 +11,7 @@ Covers:
   - omega_stats action=milestones: milestone progress
   - handle_omega_browse: browse by type/session/recent
 """
+import json
 from unittest.mock import patch
 
 import pytest
@@ -67,6 +69,129 @@ class TestOmegaReflect:
         """Unknown action should return an error."""
         result = await handle_omega_reflect({"action": "bogus"})
         assert result.get("isError")
+
+
+# ---------------------------------------------------------------------------
+# omega_memory action=get
+# ---------------------------------------------------------------------------
+
+
+class TestOmegaMemoryGet:
+    @pytest.mark.asyncio
+    async def test_get_single_memory_markdown_full_content(self, mock_get_store):
+        store = mock_get_store
+        long_content = "Direct hydration keeps the full memory body. " * 20
+        node_id = store.store(
+            long_content,
+            session_id="sess-get-1",
+            metadata={
+                "event_type": "checkpoint",
+                "project": "/tmp/omega-dev-test",
+                "tags": ["retrieval", "checkpoint"],
+                "source_uri": "test://source",
+            },
+            source_uri="test://source",
+        )
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        text = result["content"][0]["text"]
+        assert node_id in text
+        assert long_content in text
+        assert "checkpoint" in text
+        assert "test://source" in text
+
+    @pytest.mark.asyncio
+    async def test_get_single_memory_json_metadata_and_columns(self, mock_get_store):
+        store = mock_get_store
+        node_id = store.store(
+            "Structured get should expose stable metadata fields.",
+            session_id="sess-get-json",
+            metadata={
+                "event_type": "decision",
+                "project": "/tmp/omega-dev-test",
+                "entity_id": "entity-1",
+                "agent_type": "test-agent",
+                "tags": ["json"],
+            },
+            entity_id="entity-1",
+            agent_type="test-agent",
+            source_uri="test://json-source",
+            status="speculative",
+        )
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        assert record["id"] == node_id
+        assert record["event_type"] == "decision"
+        assert record["session_id"] == "sess-get-json"
+        assert record["project"] == "/tmp/omega-dev-test"
+        assert record["entity_id"] == "entity-1"
+        assert record["agent_type"] == "test-agent"
+        assert record["source_uri"] == "test://json-source"
+        assert record["status"] == "speculative"
+        assert record["metadata"]["tags"] == ["json"]
+
+    @pytest.mark.asyncio
+    async def test_get_missing_memory_returns_error(self, mock_get_store):
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": "mem-000000000000",
+        })
+
+        assert result.get("isError")
+        assert "not found" in result["content"][0]["text"].lower()
+
+    @pytest.mark.asyncio
+    async def test_get_batch_preserves_order_and_reports_missing(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("First batch memory", metadata={"event_type": "memory"})
+        second = store.store("Second batch memory", metadata={"event_type": "lesson_learned"})
+        missing = "mem-ffffffffffff"
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, missing, second],
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert [record["id"] for record in payload["records"]] == [first, second]
+        assert payload["not_found"] == [missing]
+
+    @pytest.mark.asyncio
+    async def test_get_track_access_false_does_not_increment(self, mock_get_store):
+        store = mock_get_store
+        node_id = store.store("Audit fetch should not update access counters.")
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["record"]["access_count"] == 0
+        node = store.get_node(node_id, track_access=False)
+        assert node.access_count == 0
+        assert node.last_accessed is None
 
 
 # ---------------------------------------------------------------------------
