@@ -54,7 +54,8 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 ## Iteration 1: Core Retrieval Tools
 
-Status: in progress.
+Status: implementation complete in the development checkout. Live promotion is
+still pending and must follow `docs/development/live-safe-development.md`.
 
 Goal: make OMEGA Free/Open useful for agent memory recovery without requiring
 Pro-only coordination or knowledge modules.
@@ -101,9 +102,7 @@ Why first:
 
 Priority: P0.
 
-Status: implemented in the current development slice; verify before promotion
-with `tests/test_query_structured_output.py` and the compatibility tests listed
-in `iteration-1-retrieval-research.md`.
+Status: completed in commit `669a056` (`feat: add structured query output`).
 
 Extend `omega_query` so agents can request full content or structured JSON.
 
@@ -142,8 +141,7 @@ Why second:
 
 Priority: P0.
 
-Status: implemented in the current development slice; verify before promotion
-with `tests/test_recall_handler.py` plus schema/handler compatibility tests.
+Status: completed in commit `3d78ab8` (`feat: add budgeted memory recall`).
 
 Add a prompt-ready retrieval workflow that searches, then hydrates the top
 results within a budget.
@@ -195,9 +193,7 @@ Why third:
 
 Priority: P1.
 
-Status: implemented in the current development slice; verify before promotion
-with `tests/test_browse_structured_output.py` plus the existing browse and
-query compatibility tests.
+Status: completed in commit `ffb9723` (`feat: add paginated browse output`).
 
 Improve `omega_query(mode="browse")`.
 
@@ -301,8 +297,7 @@ Why sixth:
 
 Priority: P2.
 
-Status: implemented in the current development slice; verify before promotion
-with `tests/test_context_handler.py` plus schema/handler compatibility tests.
+Status: completed in commit `7b63c82` (`feat: add project context packs`).
 
 Add a focused project briefing tool.
 
@@ -339,6 +334,9 @@ Why later in iteration 1:
   reliable first.
 
 ## Iteration 1 Acceptance Criteria
+
+Development checkout status: met and verified on branch `dev/retrieval-tools`.
+Live checkout status: not promoted.
 
 Iteration 1 is complete when:
 

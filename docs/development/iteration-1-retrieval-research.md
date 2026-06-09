@@ -2,26 +2,27 @@
 
 Captured: 2026-06-09T08:15:46Z.
 
-Status: research complete, implementation in progress.
+Status: research complete; development implementation complete on branch
+`dev/retrieval-tools`; live promotion pending.
 
 Implementation progress:
 
 - `omega_memory(action="get")` completed and pushed in commit `2cbd6b2`
   (`feat: add direct memory retrieval action`).
-- Structured/full-content semantic `omega_query` output implemented in the
-  current development slice. It preserves default markdown behavior unless a
+- Structured/full-content semantic `omega_query` output completed in commit
+  `669a056`. It preserves default markdown behavior unless a
   caller explicitly requests JSON, full content, custom preview size,
   metadata controls, constraint/preference injection controls, or budget
   controls.
-- `omega_recall` implemented in the current development slice with transparent
+- `omega_recall` completed in commit `3d78ab8` with transparent
   profiles, profile event-type expansion, phrase fallback for selected
   profiles, dedupe, budgeted full-content packing, JSON/markdown output, and
   optional related expansion.
-- Full and paginated browse implemented in the current development slice:
+- Full and paginated browse completed in commit `ffb9723`:
   `omega_query(mode="browse")` preserves default markdown previews while
   adding SQL-backed `offset`, JSON output, `content_mode`, `preview_chars`,
   `include_metadata`, and full-content budget reporting.
-- Project context packs implemented in the current development slice:
+- Project context packs completed in commit `7b63c82`:
   `omega_context` assembles deterministic project-scoped handoff/planning/debug
   sections from recent typed memories, includes stable IDs, supports
   markdown/JSON output, content controls, lifecycle status filters, and an
@@ -251,7 +252,7 @@ Safety:
 
 ### P0. Full and structured `omega_query`
 
-Implementation status: implemented in the current development slice.
+Implementation status: completed in commit `669a056`.
 
 Purpose: preserve today's default query behavior while allowing agents to ask
 for machine-readable and/or full-content results.
@@ -301,7 +302,7 @@ Verified behavior in this slice:
 
 ### P0. `omega_recall`
 
-Implementation status: implemented in the current development slice.
+Implementation status: completed in commit `3d78ab8`.
 
 Purpose: one-call query-then-hydrate workflow for agent recovery.
 
@@ -381,7 +382,7 @@ Verified behavior in this slice:
 
 ### P1. Full and paginated browse
 
-Implementation status: implemented in the current development slice.
+Implementation status: completed in commit `ffb9723`.
 
 Purpose: make browse useful when the agent does not know exact query terms.
 
@@ -451,7 +452,7 @@ Implementation status: completed in `src/omega/server/retrieval_profiles.py`.
 
 ### P2. Project context pack
 
-Implementation status: implemented in the current development slice.
+Implementation status: completed in commit `7b63c82`.
 
 Purpose: provide a deterministic project briefing when agents do not yet know
 which exact memory to search for.
@@ -517,22 +518,22 @@ most natural expansions.
 3. Add focused tests for full fetch, metadata, not-found, batch order, and
    `track_access=false`.
 4. Add `format`, `content_mode`, `preview_chars`, and `budget_chars` to
-   semantic `omega_query`. Completed in current development slice.
+   semantic `omega_query`. Completed in commit `669a056`.
 5. Add focused tests proving default query output is unchanged and full/JSON
    output includes full content within budget. Completed in
    `tests/test_query_structured_output.py`.
 6. Add `omega_recall` schema and handler.
-   Completed in current development slice.
+   Completed in commit `3d78ab8`.
 7. Add retrieval profiles and dedupe/budget packing. Completed in current
-   development slice.
+   commit `3d78ab8`.
 8. Add tests for each recall profile, truncation, omitted IDs, and JSON shape.
    Covered by `tests/test_recall_handler.py`.
 9. Extend browse with JSON, pagination, and content modes.
-   Completed in current development slice and covered by
+   Completed in commit `ffb9723` and covered by
    `tests/test_browse_structured_output.py`.
 10. Add related expansion to get/recall. Completed for `get` and `recall`;
     browse remains separate.
-11. Add project context pack. Completed in current development slice and
+11. Add project context pack. Completed in commit `7b63c82` and
     covered by `tests/test_context_handler.py`.
 
 ## Test Plan
@@ -572,6 +573,8 @@ OMEGA_HOME=/tmp/omega-memory-dev-home .venv/bin/python -m pytest <focused tests>
 Do not run `omega setup` from the dev checkout during this iteration.
 
 ## First Iteration Acceptance Criteria
+
+Development checkout status: met. Live promotion has not been performed.
 
 Iteration 1 is acceptable when a zero-context agent can:
 
