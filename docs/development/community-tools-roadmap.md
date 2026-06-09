@@ -54,7 +54,7 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 ## Iteration 1: Core Retrieval Tools
 
-Status: planned.
+Status: in progress.
 
 Goal: make OMEGA Free/Open useful for agent memory recovery without requiring
 Pro-only coordination or knowledge modules.
@@ -62,6 +62,9 @@ Pro-only coordination or knowledge modules.
 ### R1. Full Memory Fetch By ID
 
 Priority: P0.
+
+Status: completed in commit `2cbd6b2` (`feat: add direct memory retrieval
+action`).
 
 Add a `get` action to `omega_memory`.
 
@@ -98,6 +101,10 @@ Why first:
 
 Priority: P0.
 
+Status: implemented in the current development slice; verify before promotion
+with `tests/test_query_structured_output.py` and the compatibility tests listed
+in `iteration-1-retrieval-research.md`.
+
 Extend `omega_query` so agents can request full content or structured JSON.
 
 Example:
@@ -113,6 +120,10 @@ Recommended arguments:
 - `preview_chars`: default current behavior, configurable.
 - `format`: `markdown` or `json`.
 - `include_metadata`: default `false` for markdown, `true` for JSON.
+- `budget_chars`: global content budget for `content_mode="full"`.
+- `include_constraints`: include automatically injected matching constraints.
+- `include_preferences`: include automatically injected matching user
+  preferences.
 
 Expected behavior:
 
@@ -120,6 +131,7 @@ Expected behavior:
 - Reuse the existing structured query path where possible.
 - Return full content only when explicitly requested.
 - Clamp output sizes to avoid accidental huge context dumps.
+- Report truncated and omitted content IDs explicitly.
 
 Why second:
 
@@ -129,6 +141,8 @@ Why second:
 ### R3. Query-Then-Hydrate Recall
 
 Priority: P0.
+
+Status: not started.
 
 Add a prompt-ready retrieval workflow that searches, then hydrates the top
 results within a budget.
@@ -172,6 +186,8 @@ Why third:
 
 Priority: P1.
 
+Status: not started.
+
 Improve `omega_query(mode="browse")`.
 
 Example:
@@ -202,6 +218,8 @@ Why fourth:
 ### R5. Retrieval Profiles
 
 Priority: P1.
+
+Status: not started.
 
 Add retrieval presets for common agent intents.
 
@@ -235,6 +253,10 @@ Why fifth:
 ### R6. Related Memory Expansion
 
 Priority: P1.
+
+Status: partially started. `omega_memory(action="get")` supports
+`include_edges`, `max_related`, and `edge_types`; `omega_recall` related
+expansion remains pending.
 
 Add optional graph expansion to `omega_memory(action="get")` and `omega_recall`.
 

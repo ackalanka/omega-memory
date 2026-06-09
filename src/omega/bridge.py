@@ -1991,11 +1991,16 @@ def query_structured(
     temporal_range: Optional[tuple] = None,
     entity_id: Optional[str] = None,
     agent_type: Optional[str] = None,
+    scope: Optional[str] = None,
     surfacing_context: Optional["SurfacingContext"] = None,
+    perspective: Optional[str] = None,
     strength_min: Optional[float] = None,
     memory_type: Optional[str] = None,
     include_contradicted: bool = False,
     valid_at: Optional[str] = None,
+    status: Optional[str] = None,
+    include_constraints: bool = True,
+    include_preferences: bool = True,
 ) -> List[Dict[str, Any]]:
     """Query memories and return structured dicts (machine-readable)."""
     db = _get_store()
@@ -2010,6 +2015,7 @@ def query_structured(
         if project:
             enhanced = f"{Path(project).name} {enhanced}"
 
+        _scope = scope if scope in ("project", "session") else "project"
         query_kwargs_s: Dict[str, Any] = {
             "limit": limit * 2 if (filter_tags or entity_id or agent_type) else limit,
             "session_id": session_id,
@@ -2021,7 +2027,10 @@ def query_structured(
             "query_hint": event_type,
             "surfacing_context": surfacing_context,
             "temporal_boost_only": _temporal_boost_only,
+            "scope": _scope,
         }
+        if perspective:
+            query_kwargs_s["perspective"] = perspective
         if valid_at:
             query_kwargs_s["valid_at"] = valid_at
         results = db.query(enhanced, **query_kwargs_s)
@@ -2039,6 +2048,13 @@ def query_structured(
         # Filter by memory_type
         if memory_type and results:
             results = [r for r in results if (r.metadata or {}).get("memory_type") == memory_type]
+
+        # Filter by lifecycle status (active, superseded, speculative, archived)
+        if status and results:
+            results = [
+                r for r in results
+                if getattr(r, "status", None) == status or (r.metadata or {}).get("status", "active") == status
+            ]
 
         # Filter to only contradicted memories
         if include_contradicted and results:
@@ -2058,8 +2074,14 @@ def query_structured(
                     "content": node.content,
                     "event_type": (node.metadata or {}).get("event_type", "memory"),
                     "session_id": (node.metadata or {}).get("session_id", ""),
+                    "project": (node.metadata or {}).get("project", ""),
+                    "entity_id": (node.metadata or {}).get("entity_id", ""),
+                    "agent_type": (node.metadata or {}).get("agent_type", ""),
                     "created_at": node.created_at.isoformat() if node.created_at else "",
                     "tags": (node.metadata or {}).get("tags", []),
+                    "status": getattr(node, "status", None) or (node.metadata or {}).get("status", "active"),
+                    "source_uri": getattr(node, "source_uri", None) or (node.metadata or {}).get("source_uri"),
+                    "derived_from": getattr(node, "derived_from", None) or (node.metadata or {}).get("derived_from"),
                     "metadata": node.metadata,
                     "relevance": getattr(node, "relevance", 0.0),
                     "_query_confidence": (node.metadata or {}).get("_query_confidence", 0.0),
@@ -2070,7 +2092,7 @@ def query_structured(
             )
 
         # Auto-inject relevant constraints
-        if event_type != "constraint":
+        if include_constraints and event_type != "constraint":
             try:
                 result_ids = {node.id for node in results}
                 constraint_nodes = db.get_by_type("constraint", limit=10)
@@ -2089,10 +2111,20 @@ def query_structured(
                                 "content": cn.content,
                                 "event_type": "constraint",
                                 "session_id": (cn.metadata or {}).get("session_id", ""),
+                                "project": (cn.metadata or {}).get("project", ""),
+                                "entity_id": (cn.metadata or {}).get("entity_id", ""),
+                                "agent_type": (cn.metadata or {}).get("agent_type", ""),
                                 "created_at": cn.created_at.isoformat() if cn.created_at else "",
                                 "tags": (cn.metadata or {}).get("tags", []),
+                                "status": getattr(cn, "status", None) or (cn.metadata or {}).get("status", "active"),
+                                "source_uri": getattr(cn, "source_uri", None) or (cn.metadata or {}).get("source_uri"),
+                                "derived_from": getattr(cn, "derived_from", None) or (cn.metadata or {}).get("derived_from"),
                                 "metadata": cn.metadata,
                                 "relevance": getattr(cn, "relevance", 0.0),
+                                "_query_confidence": (cn.metadata or {}).get("_query_confidence", 0.0),
+                                "strength": round(getattr(cn, "strength", 0.0), 3),
+                                "valid_from": cn.valid_from.isoformat() if hasattr(cn, "valid_from") and cn.valid_from else None,
+                                "valid_until": cn.valid_until.isoformat() if hasattr(cn, "valid_until") and cn.valid_until else None,
                                 "is_constraint": True,
                             })
                             injected += 1
@@ -2107,7 +2139,7 @@ def query_structured(
             "should", "allowed", "policy", "default", "location",
             "timezone", "where", "how",
         }
-        if event_type != "user_preference":
+        if include_preferences and event_type != "user_preference":
             try:
                 query_words_lower = {w.lower().rstrip("?.,!") for w in query_text.split() if len(w) > 1}
                 if query_words_lower & _PREF_SIGNAL_WORDS_S:
@@ -2128,10 +2160,20 @@ def query_structured(
                                     "content": pn.content,
                                     "event_type": "user_preference",
                                     "session_id": (pn.metadata or {}).get("session_id", ""),
+                                    "project": (pn.metadata or {}).get("project", ""),
+                                    "entity_id": (pn.metadata or {}).get("entity_id", ""),
+                                    "agent_type": (pn.metadata or {}).get("agent_type", ""),
                                     "created_at": pn.created_at.isoformat() if pn.created_at else "",
                                     "tags": (pn.metadata or {}).get("tags", []),
+                                    "status": getattr(pn, "status", None) or (pn.metadata or {}).get("status", "active"),
+                                    "source_uri": getattr(pn, "source_uri", None) or (pn.metadata or {}).get("source_uri"),
+                                    "derived_from": getattr(pn, "derived_from", None) or (pn.metadata or {}).get("derived_from"),
                                     "metadata": pn.metadata,
                                     "relevance": getattr(pn, "relevance", 0.0),
+                                    "_query_confidence": (pn.metadata or {}).get("_query_confidence", 0.0),
+                                    "strength": round(getattr(pn, "strength", 0.0), 3),
+                                    "valid_from": pn.valid_from.isoformat() if hasattr(pn, "valid_from") and pn.valid_from else None,
+                                    "valid_until": pn.valid_until.isoformat() if hasattr(pn, "valid_until") and pn.valid_until else None,
                                     "is_preference": True,
                                 })
                                 injected += 1

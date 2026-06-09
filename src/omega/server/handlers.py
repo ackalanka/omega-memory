@@ -307,6 +307,15 @@ def _format_memory_record_markdown(record: dict, index: int | None = None) -> st
     tags = record.get("tags") or []
     if tags:
         lines.append("Tags: " + ", ".join(str(tag) for tag in tags))
+    strength = record.get("strength")
+    relevance = record.get("relevance")
+    if strength is not None or relevance is not None:
+        score_bits = []
+        if strength is not None:
+            score_bits.append(f"Strength: {strength}")
+        if relevance is not None:
+            score_bits.append(f"Relevance: {relevance}")
+        lines.append(" | ".join(score_bits))
     lines.append(
         f"Access count: {record.get('access_count', 0)} | "
         f"Content length: {record.get('content_length', 0)}"
@@ -339,6 +348,133 @@ def _format_memory_record_markdown(record: dict, index: int | None = None) -> st
                 f"- `{related.get('node_id')}` hop={related.get('hop')} "
                 f"type={related.get('edge_type')} weight={related.get('weight')}: {rel_content}"
             )
+    return "\n".join(lines)
+
+
+def _query_record_base(record: dict, include_metadata: bool) -> dict:
+    """Normalize bridge.query_structured records for MCP output."""
+    metadata = dict(record.get("metadata") or {})
+    normalized = {
+        "id": record.get("id", ""),
+        "content": record.get("content") or "",
+        "event_type": record.get("event_type") or metadata.get("event_type") or metadata.get("type") or "memory",
+        "created_at": record.get("created_at"),
+        "updated_at": metadata.get("updated_at"),
+        "session_id": record.get("session_id") or metadata.get("session_id"),
+        "project": record.get("project") or metadata.get("project"),
+        "entity_id": record.get("entity_id") or metadata.get("entity_id"),
+        "agent_type": record.get("agent_type") or metadata.get("agent_type"),
+        "tags": record.get("tags") or metadata.get("tags", []),
+        "status": record.get("status") or metadata.get("status", "active"),
+        "source_uri": record.get("source_uri") or metadata.get("source_uri"),
+        "derived_from": record.get("derived_from") or metadata.get("derived_from"),
+        "strength": record.get("strength"),
+        "relevance": record.get("relevance"),
+        "_query_confidence": record.get("_query_confidence"),
+        "valid_from": record.get("valid_from"),
+        "valid_until": record.get("valid_until"),
+        "is_constraint": bool(record.get("is_constraint", False)),
+        "is_preference": bool(record.get("is_preference", False)),
+    }
+    if include_metadata:
+        normalized["metadata"] = metadata
+    return normalized
+
+
+def _apply_query_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+    include_metadata: bool,
+) -> tuple[list[dict], dict]:
+    """Apply content mode and global content budget to structured query records."""
+    remaining = budget_chars if content_mode == "full" else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_content_ids = []
+    controlled = []
+
+    for raw_record in records:
+        record = _query_record_base(raw_record, include_metadata=include_metadata)
+        original_content = str(record.get("content") or "")
+        record["content_length"] = len(original_content)
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+        elif content_mode == "preview":
+            if len(original_content) > preview_chars:
+                record["content"] = original_content[:preview_chars]
+                record["content_truncated"] = True
+                truncated_ids.append(record["id"])
+            else:
+                record["content"] = original_content
+            budget_used += len(record.get("content") or "")
+        else:
+            if remaining is None:
+                record["content"] = original_content
+                budget_used += len(original_content)
+            elif remaining <= 0:
+                record["content"] = ""
+                record["content_truncated"] = True
+                record["content_omitted_due_to_budget"] = True
+                omitted_content_ids.append(record["id"])
+            elif len(original_content) > remaining:
+                record["content"] = original_content[:remaining]
+                record["content_truncated"] = True
+                record["budget_truncated"] = True
+                truncated_ids.append(record["id"])
+                budget_used += remaining
+                remaining = 0
+            else:
+                record["content"] = original_content
+                budget_used += len(original_content)
+                remaining -= len(original_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_content_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_content_ids),
+    }
+
+
+def _format_query_records_markdown(
+    *,
+    query_text: str,
+    records: list[dict],
+    metadata: dict,
+) -> str:
+    """Render structured query records as markdown."""
+    confidence = metadata.get("confidence")
+    confidence_label = ""
+    if confidence is not None and confidence < 0.3:
+        confidence_label = " (confidence: low -- results may not be relevant)"
+    elif confidence is not None and confidence <= 0.7:
+        confidence_label = " (confidence: medium)"
+
+    lines = [f"Results: {len(records)}{confidence_label}", f"Query: {query_text}"]
+    if metadata.get("content_truncated"):
+        lines.append(
+            "Content budget applied: "
+            f"{metadata.get('content_budget_used', 0)}/{metadata.get('budget_chars', 'unbounded')} chars"
+        )
+    if not records:
+        lines.extend(["", "*No matching memories found.*"])
+        return "\n".join(lines)
+
+    for i, record in enumerate(records, 1):
+        lines.extend(["", _format_memory_record_markdown(record, index=i)])
+
+    omitted = metadata.get("content_omitted_ids") or []
+    if omitted:
+        lines.extend(["", "Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in omitted)])
     return "\n".join(lines)
 
 
@@ -803,6 +939,28 @@ async def handle_omega_query(arguments: dict) -> dict:
     include_contradicted = arguments.get("include_contradicted", False)
     valid_at = arguments.get("valid_at")
     status_filter = arguments.get("status")
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+    preview_chars = _clamp_int(arguments.get("preview_chars", 200), default=200, min_val=1, max_val=20000)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 30000), default=30000, min_val=0, max_val=200000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    include_constraints = arguments.get("include_constraints", True)
+    include_preferences = arguments.get("include_preferences", True)
+    uses_structured_output = (
+        output_format == "json"
+        or content_mode != "preview"
+        or "preview_chars" in arguments
+        or "budget_chars" in arguments
+        or "include_metadata" in arguments
+        or "include_constraints" in arguments
+        or "include_preferences" in arguments
+    )
 
     # Map context param to SurfacingContext enum
     surfacing_context = None
@@ -855,29 +1013,118 @@ async def handle_omega_query(arguments: dict) -> dict:
             except Exception:
                 pass
         else:
-            from omega.bridge import query
+            if uses_structured_output:
+                from omega.bridge import query_structured
 
-            result = query(
-                query_text=query_text,
-                limit=limit,
-                event_type=event_type,
-                project=project,
-                session_id=session_id,
-                context_file=context_file,
-                context_tags=context_tags,
-                filter_tags=filter_tags,
-                temporal_range=temporal_range,
-                entity_id=entity_id,
-                agent_type=agent_type,
-                scope=scope,
-                surfacing_context=surfacing_context,
-                perspective=perspective,
-                strength_min=strength_min,
-                memory_type=memory_type,
-                include_contradicted=include_contradicted,
-                valid_at=valid_at,
-                status=status_filter,
-            )
+                raw_records = query_structured(
+                    query_text=query_text,
+                    limit=limit,
+                    event_type=event_type,
+                    project=project,
+                    session_id=session_id,
+                    context_file=context_file,
+                    context_tags=context_tags,
+                    filter_tags=filter_tags,
+                    temporal_range=temporal_range,
+                    entity_id=entity_id,
+                    agent_type=agent_type,
+                    scope=scope,
+                    surfacing_context=surfacing_context,
+                    perspective=perspective,
+                    strength_min=strength_min,
+                    memory_type=memory_type,
+                    include_contradicted=include_contradicted,
+                    valid_at=valid_at,
+                    status=status_filter,
+                    include_constraints=bool(include_constraints),
+                    include_preferences=bool(include_preferences),
+                )
+                controlled_records, content_meta = _apply_query_content_controls(
+                    raw_records,
+                    content_mode=content_mode,
+                    preview_chars=preview_chars,
+                    budget_chars=budget_chars,
+                    include_metadata=bool(include_metadata),
+                )
+                confidence_values = [
+                    record.get("_query_confidence")
+                    for record in controlled_records
+                    if record.get("_query_confidence") is not None
+                ]
+                confidence = confidence_values[0] if confidence_values else None
+                query_metadata = {
+                    "mode": "semantic",
+                    "format": output_format,
+                    "query": query_text,
+                    "limit": limit,
+                    "filters": {
+                        "event_type": event_type,
+                        "project": project,
+                        "session_id": session_id,
+                        "context_file": context_file,
+                        "context_tags": context_tags,
+                        "filter_tags": filter_tags,
+                        "temporal_range": temporal_range,
+                        "entity_id": entity_id,
+                        "agent_type": agent_type,
+                        "scope": scope,
+                        "context": context_param,
+                        "perspective": perspective,
+                        "strength_min": strength_min,
+                        "memory_type": memory_type,
+                        "include_contradicted": include_contradicted,
+                        "valid_at": valid_at,
+                        "status": status_filter,
+                    },
+                    "result_count": len(controlled_records),
+                    "content_mode": content_mode,
+                    "preview_chars": preview_chars,
+                    "budget_chars": budget_chars if content_mode == "full" else None,
+                    "include_metadata": bool(include_metadata),
+                    "include_constraints": bool(include_constraints),
+                    "include_preferences": bool(include_preferences),
+                    "confidence": confidence,
+                    **content_meta,
+                }
+                result_payload = {
+                    "mode": "semantic",
+                    "query": query_text,
+                    "result_count": len(controlled_records),
+                    "results": controlled_records,
+                    "metadata": query_metadata,
+                }
+                if output_format == "json":
+                    result = json.dumps(result_payload, indent=2)
+                else:
+                    result = _format_query_records_markdown(
+                        query_text=query_text,
+                        records=controlled_records,
+                        metadata=query_metadata,
+                    )
+            else:
+                from omega.bridge import query
+
+                result = query(
+                    query_text=query_text,
+                    limit=limit,
+                    event_type=event_type,
+                    project=project,
+                    session_id=session_id,
+                    context_file=context_file,
+                    context_tags=context_tags,
+                    filter_tags=filter_tags,
+                    temporal_range=temporal_range,
+                    entity_id=entity_id,
+                    agent_type=agent_type,
+                    scope=scope,
+                    surfacing_context=surfacing_context,
+                    perspective=perspective,
+                    strength_min=strength_min,
+                    memory_type=memory_type,
+                    include_contradicted=include_contradicted,
+                    valid_at=valid_at,
+                    status=status_filter,
+                )
 
         # Mark deploy gate as cleared when querying decisions
         if event_type == "decision":

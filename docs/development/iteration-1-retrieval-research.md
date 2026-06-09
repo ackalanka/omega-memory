@@ -2,7 +2,17 @@
 
 Captured: 2026-06-09T08:15:46Z.
 
-Status: research complete, implementation not started.
+Status: research complete, implementation in progress.
+
+Implementation progress:
+
+- `omega_memory(action="get")` completed and pushed in commit `2cbd6b2`
+  (`feat: add direct memory retrieval action`).
+- Structured/full-content semantic `omega_query` output implemented in the
+  current development slice. It preserves default markdown behavior unless a
+  caller explicitly requests JSON, full content, custom preview size,
+  metadata controls, constraint/preference injection controls, or budget
+  controls.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -182,6 +192,8 @@ plus higher-level auto context block.
 
 ### P0. `omega_memory(action="get")`
 
+Implementation status: completed in commit `2cbd6b2`.
+
 Purpose: direct full memory hydration by stable memory ID.
 
 Why first:
@@ -226,6 +238,8 @@ Safety:
 
 ### P0. Full and structured `omega_query`
 
+Implementation status: implemented in the current development slice.
+
 Purpose: preserve today's default query behavior while allowing agents to ask
 for machine-readable and/or full-content results.
 
@@ -233,11 +247,13 @@ Schema additions to `omega_query`:
 
 - `format`: `markdown` or `json`, default `markdown`;
 - `content_mode`: `preview`, `full`, or `none`, default `preview`;
-- `preview_chars`: default current behavior, clamped;
+- `preview_chars`: default `200` to match current semantic query previews,
+  clamped;
 - `include_metadata`: default `false` for markdown, `true` for JSON;
-- `budget_chars`: optional global content budget when `content_mode="full"`;
-- `include_constraints`: default current behavior in markdown, explicit in JSON;
-- `include_preferences`: default current behavior in markdown, explicit in JSON.
+- `budget_chars`: optional global content budget when `content_mode="full"`,
+  default `30000`, clamped;
+- `include_constraints`: default `true`, explicit toggle for structured output;
+- `include_preferences`: default `true`, explicit toggle for structured output.
 
 Implementation direction:
 
@@ -245,6 +261,8 @@ Implementation direction:
 - for JSON or full output, call `query_structured()` or refactor shared query
   collection into one helper so markdown and JSON do not drift;
 - add `status` to `query_structured()` for parity with markdown query;
+- pass `scope` and `perspective` through `query_structured()` for parity with
+  markdown query;
 - include query metadata: mode, filters, result_count, truncated, omitted IDs,
   confidence when available.
 
@@ -253,6 +271,20 @@ Safety:
 - default output remains backward compatible;
 - `content_mode="full"` must honor `budget_chars`;
 - report truncation explicitly.
+
+Verified behavior in this slice:
+
+- default semantic `omega_query` without new output options still uses the
+  existing markdown preview path;
+- `format="json"` returns `results` and `metadata` with stable IDs, full
+  content when requested, query filters, confidence, and content budget
+  reporting;
+- `content_mode="preview"` honors `preview_chars`;
+- `content_mode="full"` honors `budget_chars` and reports truncated or
+  omitted content IDs;
+- `content_mode="none"` keeps IDs and metadata while omitting body text;
+- `include_constraints=false` and `include_preferences=false` suppress
+  structured injection records.
 
 ### P0. `omega_recall`
 
@@ -389,9 +421,10 @@ most natural expansions.
 3. Add focused tests for full fetch, metadata, not-found, batch order, and
    `track_access=false`.
 4. Add `format`, `content_mode`, `preview_chars`, and `budget_chars` to
-   semantic `omega_query`.
+   semantic `omega_query`. Completed in current development slice.
 5. Add focused tests proving default query output is unchanged and full/JSON
-   output includes full content within budget.
+   output includes full content within budget. Completed in
+   `tests/test_query_structured_output.py`.
 6. Add `omega_recall` schema and handler.
 7. Add retrieval profiles and dedupe/budget packing.
 8. Add tests for each recall profile, truncation, omitted IDs, and JSON shape.

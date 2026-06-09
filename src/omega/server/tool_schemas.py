@@ -124,6 +124,42 @@ TOOL_SCHEMAS = [
                     "enum": ["active", "superseded", "speculative", "archived"],
                     "description": "Filter by memory lifecycle status. Default: returns all statuses. Use 'active' to exclude superseded/archived.",
                 },
+                "format": {
+                    "type": "string",
+                    "enum": ["markdown", "json"],
+                    "description": "Output format for semantic mode. Default markdown preserves existing preview behavior.",
+                    "default": "markdown",
+                },
+                "content_mode": {
+                    "type": "string",
+                    "enum": ["preview", "full", "none"],
+                    "description": "Semantic mode content shape when using the structured output path. Default preview.",
+                    "default": "preview",
+                },
+                "preview_chars": {
+                    "type": "integer",
+                    "description": "Preview character limit for semantic mode structured output. Default 200 to match existing query previews.",
+                    "default": 200,
+                },
+                "budget_chars": {
+                    "type": "integer",
+                    "description": "Global content budget for semantic mode when content_mode='full'. Default 30000, max 200000.",
+                    "default": 30000,
+                },
+                "include_metadata": {
+                    "type": "boolean",
+                    "description": "Include full metadata in structured semantic results. Defaults true for JSON and false for markdown.",
+                },
+                "include_constraints": {
+                    "type": "boolean",
+                    "description": "Include automatically injected matching constraints in structured semantic results.",
+                    "default": True,
+                },
+                "include_preferences": {
+                    "type": "boolean",
+                    "description": "Include automatically injected matching user preferences in structured semantic results.",
+                    "default": True,
+                },
             },
         },
     },
