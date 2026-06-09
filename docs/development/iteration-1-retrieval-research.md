@@ -29,7 +29,7 @@ Implementation progress:
   optional focused query section.
 - Agent-facing retrieval guidance is maintained as part of Iteration 1:
   MCP startup instructions, `omega_protocol`, managed client setup fragments,
-  condensed-mode meta-tool descriptions and `omega_tools(tool=...)`
+  condensed-mode meta-tool descriptions and `omega_tools(tool=..., detail="full")`
   discovery output, and `skills/omega-memory/SKILL.md` teach the long-context
   workflow from `omega_context` and `omega_recall` through structured/full
   `omega_query` and `omega_memory(action="get")`.
@@ -562,9 +562,9 @@ Focused unit/integration tests:
 - `omega_context` returns project-scoped handoff/planning/debug packs with
   stable memory IDs.
 - MCP startup instructions, `omega_protocol`, managed client setup fragments,
-  condensed-mode schema text, `omega_tools(tool=...)` discovery output, and
-  the `omega-memory` skill explain how agents discover and use the retrieval
-  tools.
+  condensed-mode schema text, `omega_tools(tool=..., detail="full")`
+  discovery output, and the `omega-memory` skill explain how agents discover
+  and use the retrieval tools.
 
 Existing checks to run after implementation:
 
@@ -608,8 +608,8 @@ Iteration 1 is acceptable when a zero-context agent can:
 5. browse memory classes with pagination;
 6. optionally expand related memories;
 7. learn the workflow from MCP instructions, `omega_protocol`, managed client
-   fragments, tool schemas, `omega_tools(tool=...)` output, and the
-   `omega-memory` skill without chat history;
+   fragments, tool schemas, `omega_tools(tool=..., detail="full")` output, and
+   the `omega-memory` skill without chat history;
 8. do all of the above against the isolated dev OMEGA home in tests.
 
 ## Summary Recommendation

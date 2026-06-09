@@ -4703,18 +4703,21 @@ def _example_args_for_tool(tool_name: str) -> dict:
 
 
 async def handle_omega_tools(args: Dict[str, Any]) -> dict:
-    """List available tools or get the full discovery record for one tool."""
+    """List tools, return a raw input schema, or return a full discovery record."""
     import json
     from omega.server.tool_schemas import TOOL_CATEGORIES
 
     tool_name = args.get("tool")
+    detail = args.get("detail", "schema")
     category = args.get("category", "all")
 
     if tool_name:
-        # Return the full discovery record for a specific tool. Keep inputSchema
-        # top-level so existing callers that parse the schema remain compatible.
+        # Preserve the original omega_tools(tool=...) behavior by default:
+        # callers that expect the raw inputSchema still receive that shape.
         for schema in _ALL_SCHEMAS:
             if schema["name"] == tool_name:
+                if detail != "full":
+                    return mcp_response(json.dumps(schema["inputSchema"], indent=2))
                 cat = TOOL_CATEGORIES.get(tool_name, "other")
                 discovery = {
                     "name": tool_name,
@@ -4753,7 +4756,10 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
         return mcp_response(f"No tools found in category '{category}'.")
 
     header = f"Available OMEGA tools ({len(lines)}):\n\n"
-    footer = "\n\nUse omega_tools(tool='name') to get the full discovery record before calling through omega_call."
+    footer = (
+        "\n\nUse omega_tools(tool='name') for the input schema, or "
+        "omega_tools(tool='name', detail='full') for description and omega_call example."
+    )
     body = "\n".join(lines)
 
     if pro_lines:

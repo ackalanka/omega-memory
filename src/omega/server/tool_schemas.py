@@ -667,13 +667,19 @@ TOOL_CATEGORIES = {
 CONDENSED_TOOL_SCHEMAS = [
     {
         "name": "omega_tools",
-        "description": "List available OMEGA tools or get the full discovery record for a specific tool, including description, category, input schema, and omega_call example. Call with no args to see all tool names and descriptions. Call with tool='name' before omega_call when a tool is hidden by condensed mode.",
+        "description": "List available OMEGA tools or inspect a specific tool. Call with no args to see all tool names and descriptions. Call with tool='name' for the input schema, or detail='full' for description, category, input schema, and omega_call example before using omega_call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "tool": {
                     "type": "string",
-                    "description": "Tool name to get a full discovery record for. Omit to list all tools.",
+                    "description": "Tool name to inspect. Omit to list all tools.",
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["schema", "full"],
+                    "description": "When tool is set: 'schema' returns the backward-compatible raw inputSchema; 'full' returns description, category, inputSchema, and omega_call example.",
+                    "default": "schema",
                 },
                 "category": {
                     "type": "string",

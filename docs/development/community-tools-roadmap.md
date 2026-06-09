@@ -353,10 +353,10 @@ Iteration 1 is complete when:
 - Focused tests cover handler schemas, markdown output, JSON output, missing
   IDs, batch IDs, and truncation/budget behavior.
 - Agent-facing MCP startup instructions, `omega_protocol`, managed client
-  fragments, condensed-mode schema text and `omega_tools(tool=...)` output,
-  and `skills/omega-memory/SKILL.md` explain `omega_context`,
-  `omega_recall`, structured/full `omega_query`, paginated browse, and
-  `omega_memory(action="get")`.
+  fragments, condensed-mode schema text and `omega_tools(tool=...,
+  detail="full")` output, and `skills/omega-memory/SKILL.md` explain
+  `omega_context`, `omega_recall`, structured/full `omega_query`, paginated
+  browse, and `omega_memory(action="get")`.
 - The live deployment procedure in
   `docs/development/live-safe-development.md` has been followed before merging
   to the live checkout.
