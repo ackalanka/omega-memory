@@ -193,6 +193,35 @@ class TestOmegaMemoryGet:
         assert node.access_count == 0
         assert node.last_accessed is None
 
+    @pytest.mark.asyncio
+    async def test_get_include_edges_exposes_related_id_alias(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store("Parent memory for direct edge hydration.", metadata={"event_type": "decision"})
+        child_id = store.store("Child memory for direct edge hydration.", metadata={"event_type": "lesson_learned"})
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        json_result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "track_access": False,
+        })
+        markdown_result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "include_edges": True,
+            "track_access": False,
+        })
+
+        assert not json_result.get("isError")
+        assert not markdown_result.get("isError")
+        payload = json.loads(json_result["content"][0]["text"])
+        related = payload["record"]["related"][0]
+        assert related["node_id"] == child_id
+        assert related["id"] == child_id
+        assert child_id in markdown_result["content"][0]["text"]
+
 
 # ---------------------------------------------------------------------------
 # omega_memory action=link

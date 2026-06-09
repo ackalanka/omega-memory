@@ -409,11 +409,12 @@ def _format_memory_record_markdown(record: dict, index: int | None = None) -> st
         lines.append("")
         lines.append("Related:")
         for related in record["related"]:
+            related_id = related.get("node_id") or related.get("id")
             rel_content = related.get("content", "")
             if len(rel_content) > 160:
                 rel_content = rel_content[:160] + "..."
             lines.append(
-                f"- `{related.get('node_id')}` hop={related.get('hop')} "
+                f"- `{related_id}` hop={related.get('hop')} "
                 f"type={related.get('edge_type')} weight={related.get('weight')}: {rel_content}"
             )
     return "\n".join(lines)
@@ -2474,7 +2475,12 @@ async def handle_omega_get_memory(arguments: dict) -> dict:
                     edge_types=edge_types,
                     exclude_ids=set(ids),
                 )
-                record["related"] = related[:max_related]
+                normalized_related = []
+                for related_record in related[:max_related]:
+                    related_payload = dict(related_record)
+                    related_payload.setdefault("id", related_payload.get("node_id"))
+                    normalized_related.append(related_payload)
+                record["related"] = normalized_related
             records.append(record)
 
         if single and not records:
