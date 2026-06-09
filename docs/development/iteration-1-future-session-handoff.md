@@ -66,27 +66,27 @@ git log --oneline --decorate -12
 The last verified code head recorded before this handoff was:
 
 ```text
-54d311b fix: normalize related memory ids
+2abb057 feat: add budgeted direct memory get
 ```
 
-The latest docs status commit before this handoff was:
+Previous docs status checkpoint before the budgeted direct-get slice:
 
 ```text
 30756db docs: record retrieval verification status
 ```
 
-The following verification had passed against the `54d311b` code state:
+The following verification had passed against the `2abb057` code state:
 
 ```bash
 .venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q
-.venv/bin/ruff check src/omega/server/handlers.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py
+.venv/bin/ruff check src/omega/server/handlers.py src/omega/server/tool_schemas.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py scripts/retrieval_promotion_smoke.py
 git diff --check
 OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py
 ```
 
 Observed results:
 
-- focused retrieval suite: 67 tests passed;
+- focused retrieval suite: 72 tests passed;
 - ruff: passed;
 - whitespace check: passed;
 - isolated promotion smoke: `status: ok`, `tool_count: 17`,

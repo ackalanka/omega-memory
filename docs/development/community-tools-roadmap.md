@@ -56,8 +56,8 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 Status: implementation complete in the development checkout. Live promotion is
 still pending and must follow `docs/development/live-safe-development.md`.
-Last verified code head recorded for this implementation: `54d311b`
-(`fix: normalize related memory ids`). The branch can move after that; always
+Last verified code head recorded for this implementation: `2abb057`
+(`feat: add budgeted direct memory get`). The branch can move after that; always
 run `git log --oneline --decorate -12` before relying on a specific head.
 Future-session completed-vs-remaining details are maintained in
 `docs/development/iteration-1-future-session-handoff.md`.
@@ -357,11 +357,11 @@ Why later in iteration 1:
 Development checkout status: met and verified on branch `dev/retrieval-tools`.
 Live checkout status: not promoted.
 
-Latest development verification on `54d311b`:
+Latest development verification on `2abb057`:
 
 - `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q`
-  passed with 67 tests.
-- `.venv/bin/ruff check src/omega/server/handlers.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py`
+  passed with 72 tests.
+- `.venv/bin/ruff check src/omega/server/handlers.py src/omega/server/tool_schemas.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py scripts/retrieval_promotion_smoke.py`
   passed.
 - `git diff --check` passed.
 - `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
