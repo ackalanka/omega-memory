@@ -4,6 +4,8 @@ import importlib.resources
 
 import pytest
 
+from omega import json_compat as json
+from omega.server import handlers
 from omega.server.handlers import handle_omega_protocol
 from omega.server import mcp_server
 from omega.server.tool_schemas import CONDENSED_TOOL_SCHEMAS, TOOL_SCHEMAS
@@ -47,9 +49,35 @@ def test_condensed_meta_tools_point_to_discovery_then_call():
     """Condensed mode should teach schema discovery before meta-calls."""
     meta = {schema["name"]: schema for schema in CONDENSED_TOOL_SCHEMAS}
 
-    assert "full schema" in meta["omega_tools"]["description"]
+    assert "full discovery record" in meta["omega_tools"]["description"]
     assert "Use omega_tools() first" in meta["omega_call"]["description"]
     assert "omega_recall" in meta["omega_call"]["description"]
+
+
+@pytest.mark.asyncio
+async def test_omega_tools_specific_tool_returns_full_discovery_record():
+    """Condensed agents need description, category, schema, and call examples."""
+    handlers._ALL_SCHEMAS = TOOL_SCHEMAS
+    handlers._ALL_HANDLERS = handlers.HANDLERS
+
+    result = await handlers.handle_omega_tools({"tool": "omega_recall"})
+
+    assert not result.get("isError")
+    payload = json.loads(result["content"][0]["text"])
+    assert payload["name"] == "omega_recall"
+    assert payload["category"] == "query"
+    assert "prompt-ready context" in payload["description"]
+    assert payload["inputSchema"]["properties"]["profile"]["enum"] == [
+        "general",
+        "debug",
+        "planning",
+        "handoff",
+        "review",
+        "implementation",
+    ]
+    assert payload["omega_call_example"]["tool"] == "omega_recall"
+    assert payload["omega_call_example"]["args"]["profile"] == "planning"
+    assert payload["omega_call_example"]["args"]["budget_chars"] == 12000
 
 
 @pytest.mark.asyncio

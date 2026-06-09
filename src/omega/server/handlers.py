@@ -4670,8 +4670,40 @@ _ALL_SCHEMAS: list = []
 _ALL_HANDLERS: dict = {}
 
 
+def _example_args_for_tool(tool_name: str) -> dict:
+    """Return a small omega_call args example for schema-discovery output."""
+    examples: dict[str, dict] = {
+        "omega_context": {
+            "project": "/path/to/repo",
+            "mode": "handoff",
+        },
+        "omega_recall": {
+            "query": "prior decisions before editing this repo",
+            "profile": "planning",
+            "project": "/path/to/repo",
+            "budget_chars": 12000,
+        },
+        "omega_query": {
+            "query": "debugging checklist",
+            "format": "json",
+            "content_mode": "preview",
+        },
+        "omega_memory": {
+            "action": "get",
+            "memory_id": "mem-...",
+            "format": "json",
+        },
+        "omega_checkpoint": {
+            "task_title": "current task",
+            "progress": "what changed and what remains",
+            "next_steps": "next safe action",
+        },
+    }
+    return examples.get(tool_name, {})
+
+
 async def handle_omega_tools(args: Dict[str, Any]) -> dict:
-    """List available tools or get the full schema for a specific tool."""
+    """List available tools or get the full discovery record for one tool."""
     import json
     from omega.server.tool_schemas import TOOL_CATEGORIES
 
@@ -4679,10 +4711,22 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
     category = args.get("category", "all")
 
     if tool_name:
-        # Return full schema for a specific tool
+        # Return the full discovery record for a specific tool. Keep inputSchema
+        # top-level so existing callers that parse the schema remain compatible.
         for schema in _ALL_SCHEMAS:
             if schema["name"] == tool_name:
-                return mcp_response(json.dumps(schema["inputSchema"], indent=2))
+                cat = TOOL_CATEGORIES.get(tool_name, "other")
+                discovery = {
+                    "name": tool_name,
+                    "category": cat,
+                    "description": schema.get("description", ""),
+                    "inputSchema": schema["inputSchema"],
+                    "omega_call_example": {
+                        "tool": tool_name,
+                        "args": _example_args_for_tool(tool_name),
+                    },
+                }
+                return mcp_response(json.dumps(discovery, indent=2))
         return mcp_error(f"Unknown tool: {tool_name}")
 
     # List all tools, optionally filtered by category
@@ -4709,7 +4753,7 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
         return mcp_response(f"No tools found in category '{category}'.")
 
     header = f"Available OMEGA tools ({len(lines)}):\n\n"
-    footer = "\n\nUse omega_tools(tool='name') to get the full input schema for any tool."
+    footer = "\n\nUse omega_tools(tool='name') to get the full discovery record before calling through omega_call."
     body = "\n".join(lines)
 
     if pro_lines:
