@@ -3,7 +3,8 @@
 Captured: 2026-06-09T08:15:46Z.
 
 Status: research complete; development implementation complete on branch
-`dev/retrieval-tools`; live promotion pending.
+`dev/retrieval-tools`; live promotion pending. Latest pushed development head:
+`54d311b` (`fix: normalize related memory ids`).
 
 Implementation progress:
 
@@ -33,6 +34,9 @@ Implementation progress:
   discovery output, and `skills/omega-memory/SKILL.md` teach the long-context
   workflow from `omega_context` and `omega_recall` through structured/full
   `omega_query` and `omega_memory(action="get")`.
+- Related-memory MCP output hardening completed in commit `54d311b`: direct
+  get edge expansion now preserves `node_id` and adds an `id` alias so agents
+  consume related records consistently across direct-get and recall payloads.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -437,7 +441,9 @@ Implementation direction:
 - respect edge filters and output budget.
 
 Implementation status: completed for the Iteration 1 target surfaces,
-`omega_memory(action="get")` and `omega_recall`.
+`omega_memory(action="get")` and `omega_recall`. Commit `54d311b` also
+normalizes direct-get related records with an `id` alias while preserving
+the store-level `node_id` field for compatibility.
 
 ### P1. Retrieval profile definitions as code, not hard-coded prose
 
@@ -582,6 +588,17 @@ rm -rf /tmp/omega-memory-dev-promotion-home
 OMEGA_HOME=/tmp/omega-memory-dev-promotion-home \
   .venv/bin/python scripts/retrieval_promotion_smoke.py
 ```
+
+Latest verification on `54d311b`:
+
+- `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q`
+  passed with 67 tests.
+- `.venv/bin/ruff check src/omega/server/handlers.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py`
+  passed.
+- `git diff --check` passed.
+- `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
+  passed with `status: ok`, `tool_count: 17`, `query_results: 2`,
+  `browse_count: 1`, `recall_results: 3`, and `context_items: 5`.
 
 The optional fresh-venv install probe is documented in
 `docs/development/live-safe-development.md`; it may fail for network/resolver

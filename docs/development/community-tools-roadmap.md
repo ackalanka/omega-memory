@@ -56,6 +56,8 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 Status: implementation complete in the development checkout. Live promotion is
 still pending and must follow `docs/development/live-safe-development.md`.
+Latest pushed development head: `54d311b` (`fix: normalize related memory
+ids`).
 Agent-facing MCP discovery and usage guidance is also part of Iteration 1:
 startup instructions, `omega_protocol`, managed client setup fragments,
 condensed-mode meta-tool descriptions and discovery output, and
@@ -275,7 +277,9 @@ Priority: P1.
 Status: implemented for the Iteration 1 target surfaces.
 `omega_memory(action="get")` supports `include_edges`, `max_related`, and
 `edge_types`; `omega_recall` supports `expand_related`, `max_related`, and
-`edge_types` with the same output budget.
+`edge_types` with the same output budget. Commit `54d311b` normalizes
+related-memory IDs in direct-get MCP output by preserving the store-level
+`node_id` field and adding an `id` alias for consistent agent consumption.
 
 Add optional graph expansion to `omega_memory(action="get")` and `omega_recall`.
 
@@ -342,6 +346,17 @@ Why later in iteration 1:
 
 Development checkout status: met and verified on branch `dev/retrieval-tools`.
 Live checkout status: not promoted.
+
+Latest development verification on `54d311b`:
+
+- `.venv/bin/pytest tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py -q`
+  passed with 67 tests.
+- `.venv/bin/ruff check src/omega/server/handlers.py tests/test_handler_actions.py tests/test_query_structured_output.py tests/test_browse_structured_output.py tests/test_recall_handler.py tests/test_context_handler.py tests/test_agent_instruction_surfaces.py`
+  passed.
+- `git diff --check` passed.
+- `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
+  passed with `status: ok`, `tool_count: 17`, `query_results: 2`,
+  `browse_count: 1`, `recall_results: 3`, and `context_items: 5`.
 
 Iteration 1 is complete when:
 
