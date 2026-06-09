@@ -142,7 +142,8 @@ Why second:
 
 Priority: P0.
 
-Status: not started.
+Status: implemented in the current development slice; verify before promotion
+with `tests/test_recall_handler.py` plus schema/handler compatibility tests.
 
 Add a prompt-ready retrieval workflow that searches, then hydrates the top
 results within a budget.
@@ -167,15 +168,23 @@ Recommended arguments:
 - `event_type`, `project`, `session_id`, `filter_tags`, `entity_id`,
   `memory_type`, `status`: same filters as `omega_query`.
 - `expand_related`: default `false`.
+- `max_related`: default `3`.
+- `edge_types`: optional edge filter for related expansion.
 - `format`: `markdown` or `json`.
+- `profile`: `general`, `debug`, `planning`, `handoff`, `review`, or
+  `implementation`.
 
 Expected behavior:
 
 - Run normal ranked retrieval.
+- Run transparent profile-specific event-type searches when no hard
+  `event_type` override is provided.
+- Run phrase fallback for profiles that benefit from exact recovery.
 - Hydrate full content for top results until `budget_chars` is reached.
 - Report omitted IDs and truncation clearly.
 - Preserve ranking, confidence, strength, IDs, metadata summaries, and source
   references.
+- Dedupe records by stable memory ID and report the searches used.
 
 Why third:
 
@@ -219,7 +228,9 @@ Why fourth:
 
 Priority: P1.
 
-Status: not started.
+Status: implemented for `omega_recall` in
+`src/omega/server/retrieval_profiles.py`; future work can tune the profile
+plans with retrieval evaluation data.
 
 Add retrieval presets for common agent intents.
 
@@ -255,8 +266,8 @@ Why fifth:
 Priority: P1.
 
 Status: partially started. `omega_memory(action="get")` supports
-`include_edges`, `max_related`, and `edge_types`; `omega_recall` related
-expansion remains pending.
+`include_edges`, `max_related`, and `edge_types`; `omega_recall` now supports
+`expand_related`, `max_related`, and `edge_types` with the same output budget.
 
 Add optional graph expansion to `omega_memory(action="get")` and `omega_recall`.
 

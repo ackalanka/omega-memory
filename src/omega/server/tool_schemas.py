@@ -1,6 +1,6 @@
-"""OMEGA MCP Tool Schemas -- 15 tools for memory management.
+"""OMEGA MCP Tool Schemas -- 16 tools for memory management.
 
-Consolidated into 15 action-discriminated composites.
+Consolidated into 16 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
 omega_briefing and omega_habits remain as backward-compat aliases in handlers.
 omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
@@ -161,6 +161,51 @@ TOOL_SCHEMAS = [
                     "default": True,
                 },
             },
+        },
+    },
+    {
+        "name": "omega_recall",
+        "description": "Search, hydrate, and pack relevant memories into a budgeted prompt-ready context block. Use when an agent needs enough retrieved memory content to act, not just search previews.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recall query. Required."},
+                "profile": {
+                    "type": "string",
+                    "enum": ["general", "debug", "planning", "handoff", "review", "implementation"],
+                    "description": "Transparent retrieval preset for common agent intents.",
+                    "default": "general",
+                },
+                "limit": {"type": "integer", "description": "Max hydrated primary memories.", "default": 5},
+                "budget_chars": {"type": "integer", "description": "Total character budget for packed memory content.", "default": 12000},
+                "event_type": {"type": "string", "description": "Optional hard event type filter. Overrides profile event-type expansion."},
+                "project": {"type": "string"},
+                "session_id": {"type": "string"},
+                "context_file": {"type": "string", "description": "Current file being edited (boosts implementation recall)"},
+                "context_tags": {"type": "array", "items": {"type": "string"}, "description": "Context tags for boosting"},
+                "filter_tags": {"type": "array", "items": {"type": "string"}, "description": "Hard filter: ALL tags must match"},
+                "temporal_range": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2, "description": "[start_iso, end_iso] date range filter"},
+                "entity_id": {"type": "string", "description": "Filter to entity. Omit for all."},
+                "agent_type": {"type": "string", "description": "Filter to agent type. Omit for all."},
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["episodic", "semantic", "procedural"],
+                    "description": "Filter by memory type.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Filter by memory lifecycle status.",
+                },
+                "include_contradicted": {"type": "boolean", "description": "Return only contradicted memories.", "default": False},
+                "valid_at": {"type": "string", "description": "ISO datetime point-in-time validity filter."},
+                "expand_related": {"type": "boolean", "description": "Include related memories under each primary result.", "default": False},
+                "max_related": {"type": "integer", "description": "Max related memories per primary result.", "default": 3},
+                "edge_types": {"type": "array", "items": {"type": "string"}, "description": "Related edge type filter."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format.", "default": "markdown"},
+                "include_metadata": {"type": "boolean", "description": "Include full metadata in JSON result records. Defaults true for JSON, false for markdown."},
+            },
+            "required": ["query"],
         },
     },
     {
@@ -478,6 +523,7 @@ TOOL_CATEGORIES = {
     # Core memory tools
     "omega_store": "memory",
     "omega_query": "query",
+    "omega_recall": "query",
     "omega_welcome": "session",
     "omega_protocol": "session",
     "omega_checkpoint": "memory",

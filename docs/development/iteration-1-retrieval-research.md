@@ -13,6 +13,10 @@ Implementation progress:
   caller explicitly requests JSON, full content, custom preview size,
   metadata controls, constraint/preference injection controls, or budget
   controls.
+- `omega_recall` implemented in the current development slice with transparent
+  profiles, profile event-type expansion, phrase fallback for selected
+  profiles, dedupe, budgeted full-content packing, JSON/markdown output, and
+  optional related expansion.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -288,6 +292,8 @@ Verified behavior in this slice:
 
 ### P0. `omega_recall`
 
+Implementation status: implemented in the current development slice.
+
 Purpose: one-call query-then-hydrate workflow for agent recovery.
 
 This is the community equivalent of the useful part of Pro context retrieval
@@ -338,6 +344,8 @@ Return contract:
   `omega_memory(action="get")`;
 - when related expansion is enabled, related results are grouped under the
   parent result and share the same budget.
+- `searches_run` reports base semantic search, profile event-type searches,
+  and phrase fallback where used.
 
 Safety:
 
@@ -345,6 +353,22 @@ Safety:
 - keep profile rules transparent in output;
 - dedupe by memory ID across semantic, phrase, and profile subqueries;
 - never hide exact not-found/truncation conditions.
+
+Verified behavior in this slice:
+
+- `omega_recall` is a first-class MCP schema and handler in the `query`
+  category;
+- markdown mode returns a prompt-ready context block with profile and search
+  plan information;
+- JSON mode returns `context`, `results`, `profile`, `filters`,
+  `searches_run`, `budget`, `omitted`, and `truncated`;
+- tight budgets truncate content and report truncated IDs;
+- profiles are defined in `src/omega/server/retrieval_profiles.py` and are
+  included in output;
+- `event_type` acts as a hard override and suppresses profile event-type
+  expansion;
+- `expand_related=true` uses existing graph edges and shares the same output
+  budget.
 
 ### P1. Full and paginated browse
 
@@ -426,10 +450,14 @@ most natural expansions.
    output includes full content within budget. Completed in
    `tests/test_query_structured_output.py`.
 6. Add `omega_recall` schema and handler.
-7. Add retrieval profiles and dedupe/budget packing.
+   Completed in current development slice.
+7. Add retrieval profiles and dedupe/budget packing. Completed in current
+   development slice.
 8. Add tests for each recall profile, truncation, omitted IDs, and JSON shape.
+   Covered by `tests/test_recall_handler.py`.
 9. Extend browse with JSON, pagination, and content modes.
-10. Add related expansion to get/recall.
+10. Add related expansion to get/recall. Completed for `get` and `recall`;
+    browse remains separate.
 
 ## Test Plan
 
