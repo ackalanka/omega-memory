@@ -1,6 +1,6 @@
 ---
 name: omega-memory
-description: "Persistent memory for AI coding agents. Teaches agents how to use OMEGA's MCP tools for storing decisions, querying context, coordinating multi-agent workflows, and resuming tasks across sessions."
+description: "Persistent memory for AI coding agents. Teaches agents how to use OMEGA's MCP tools for long-context retrieval, full memory hydration, project context packs, storing decisions, and resuming tasks across sessions."
 license: Apache-2.0
 compatibility: "Python 3.11+, Claude Code, Cursor, Windsurf, Zed"
 metadata:
@@ -25,9 +25,38 @@ omega doctor       # verify everything works
 
 Works with Claude Code, Cursor, Windsurf, Zed, and any MCP client.
 
-## Core Tools
+## MCP Tool Discovery
 
-OMEGA provides 12 MCP tools. Here's when to use each one.
+OMEGA exposes its tools through MCP `tools/list`: the client receives tool
+names, descriptions, and JSON input schemas, then validates calls through
+`tools/call`. Some clients show every schema directly. In condensed mode,
+OMEGA intentionally exposes only high-frequency tools plus `omega_tools` and
+`omega_call`; use those two meta-tools to discover and call the rest.
+
+Discovery pattern in condensed mode:
+
+```text
+omega_tools(category="query")
+omega_tools(tool="omega_recall")
+omega_call(tool="omega_recall", args={"query": "...", "profile": "planning"})
+```
+
+## Long-Context Retrieval Workflow
+
+Use this order when coding in a large repo or resuming a long task:
+
+1. `omega_welcome(project=...)` for the session briefing.
+2. `omega_protocol(project=..., section="full")` for operating rules.
+3. `omega_context(project=..., mode="handoff")` for project-scoped recovery.
+4. `omega_recall(query=..., profile=..., project=..., budget_chars=...)` when
+   you need enough full memory content to act.
+5. `omega_query(format="json", content_mode="preview"|"full")` when you need
+   structured search results for inspection or follow-up logic.
+6. `omega_memory(action="get", memory_id="mem-...")` when search gives you a
+   stable ID and you need the full record.
+7. `omega_store(...)` or `omega_checkpoint(...)` after meaningful state changes.
+
+## Core Tools
 
 ### Storing Memories
 
@@ -45,7 +74,7 @@ Store decisions, lessons, and context that should persist across sessions.
 | `checkpoint` | Mid-task state for resumption | 7 days |
 
 ```
-omega_store("Switched from REST to GraphQL for the dashboard API — reduces N+1 queries", "decision")
+omega_store("Switched from REST to GraphQL for the dashboard API - reduces N+1 queries", "decision")
 omega_store("User prefers early returns, max 2 levels of nesting", "user_preference")
 omega_store("pytest fixtures with db cleanup must use function scope, not session scope", "lesson_learned")
 ```
@@ -54,7 +83,7 @@ omega_store("pytest fixtures with db cleanup must use function scope, not sessio
 
 ### Querying Memories
 
-**`omega_query(query, mode?, limit?, entity_id?)`**
+**`omega_query(query, mode?, limit?, entity_id?, format?, content_mode?)`**
 
 Search memories by meaning, not just keywords. Uses hybrid retrieval: vector similarity + full-text search + cross-encoder reranking.
 
@@ -69,10 +98,71 @@ Search memories by meaning, not just keywords. Uses hybrid retrieval: vector sim
 omega_query("database migration strategy")
 omega_query("what decisions were made about the API", mode="timeline", days=7)
 omega_query("pytest", mode="phrase")
-omega_query(mode="browse", browse_by="type")
+omega_query(mode="browse", browse_by="type", event_type="lesson_learned", offset=0)
+omega_query("pre-PR checklist", format="json", content_mode="full", budget_chars=12000)
 ```
 
-**Pro tip:** Query before starting work. Prior decisions and lessons save time and prevent repeating mistakes.
+Use `content_mode="preview"` for cheap inspection, `content_mode="full"` only
+when you need full bodies, and `format="json"` when the caller needs stable
+IDs, metadata, truncation state, and follow-up targets.
+
+### Prompt-Ready Recall
+
+**`omega_recall(query, profile?, project?, budget_chars?, expand_related?)`**
+
+Search, hydrate, deduplicate, and pack relevant memories into one bounded
+context block. Use it when a normal query preview is not enough to resume or
+make a coding decision.
+
+| Profile | When to Use |
+|---------|-------------|
+| `general` | Default broad recall |
+| `debug` | Errors, CI failures, fixes, exact phrase fallback |
+| `planning` | Decisions, constraints, task completions, project setup |
+| `handoff` | Checkpoints, completions, recent continuity state |
+| `review` | Lessons, decisions, contradictions, stale markers |
+| `implementation` | Code patterns, file context, lessons, error patterns |
+
+```text
+omega_recall("sentinel-core pre-PR checklist", profile="handoff", project="/home/akalanka/sentinel-core")
+omega_recall("pytest sqlite lock failure", profile="debug", budget_chars=12000)
+omega_recall("restore workflow decisions", profile="implementation", expand_related=true, max_related=3)
+```
+
+Prefer `omega_recall` over chaining several broad queries when context is long.
+It returns the searches used, selected IDs, omitted IDs, and truncation status.
+
+### Direct Memory Hydration
+
+**`omega_memory(action="get", memory_id?, memory_ids?, include_edges?)`**
+
+Fetch full memories by stable ID. Use this after `omega_query`, `omega_recall`,
+or `omega_context` returns an ID that needs exact inspection.
+
+```text
+omega_memory(action="get", memory_id="mem-abc123", format="json")
+omega_memory(action="get", memory_ids=["mem-a", "mem-b"], include_metadata=true)
+omega_memory(action="get", memory_id="mem-abc123", include_edges=true, max_related=5)
+```
+
+Set `track_access=false` for audits or tests. Use `content_mode="preview"` or
+`content_mode="none"` when you only need metadata.
+
+### Project Context Packs
+
+**`omega_context(project?, mode?, query?, budget_chars?)`**
+
+Build a compact project-scoped pack from recent checkpoints, completions,
+lessons, decisions, constraints, and optional focused recall.
+
+```text
+omega_context(project="/home/akalanka/sentinel-core", mode="handoff")
+omega_context(project="/home/akalanka/sentinel-core", mode="planning", query="SC-024")
+omega_context(project="/home/akalanka/sentinel-core", mode="debug", format="json")
+```
+
+Use this near the start of long repo work, after `omega_welcome` and
+`omega_protocol`, especially when the task may have prior checkpoints.
 
 ### Session Management
 
@@ -120,8 +210,11 @@ This hybrid approach achieves 95.4% on LongMemEval (500-question benchmark).
 
 ### Query Patterns That Work
 
-- **Before starting a task:** `omega_query("prior decisions about [feature area]")`
+- **Before starting a long task:** `omega_context(project="[repo]", mode="handoff")`
+- **Before making a decision:** `omega_recall("prior decisions about [feature area]", profile="planning", project="[repo]")`
 - **Before modifying a file:** `omega_query(context_file="/path/to/file.py")`
+- **After finding an ID:** `omega_memory(action="get", memory_id="mem-...")`
+- **When browsing uncertain terms:** `omega_query(mode="browse", browse_by="recent", offset=0, format="json")`
 - **After debugging:** `omega_store("[root cause and fix]", "lesson_learned")`
 - **When user says "remember":** `omega_store("[what they said]", "user_preference")`
 
@@ -131,6 +224,8 @@ This hybrid approach achieves 95.4% on LongMemEval (500-question benchmark).
 |-------|-----------|
 | Store every tool result | Store only insights and decisions |
 | Query with single words | Use natural language questions |
+| Depend on 200-character previews for handoff recovery | Use `omega_recall` or `omega_memory(action="get")` |
+| Guess available hidden tools in condensed mode | Call `omega_tools(category=...)` or `omega_tools(tool=...)` |
 | Skip `omega_welcome` at session start | Always call it — it loads critical context |
 | Store without `event_type` | Always specify type for proper TTL and dedup |
 | Guess from stale memory | Query OMEGA to verify current state |

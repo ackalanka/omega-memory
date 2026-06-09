@@ -687,7 +687,7 @@ CONDENSED_TOOL_SCHEMAS = [
     },
     {
         "name": "omega_call",
-        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Example: omega_call(tool='omega_query', args={'query': 'auth decisions', 'mode': 'semantic'})",
+        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Retrieval examples: omega_call(tool='omega_recall', args={'query': 'auth decisions', 'profile': 'planning'}), omega_call(tool='omega_context', args={'project': '/repo', 'mode': 'handoff'}), omega_call(tool='omega_memory', args={'action': 'get', 'memory_id': 'mem-...'})",
         "inputSchema": {
             "type": "object",
             "properties": {

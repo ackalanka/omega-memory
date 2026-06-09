@@ -28,8 +28,9 @@ order:
 1. `docs/development/live-safe-development.md`
 2. `docs/development/community-tools-roadmap.md`
 3. `docs/development/iteration-1-retrieval-research.md`
-4. Relevant source files under `src/omega/`
-5. Relevant tests under `tests/`
+4. `skills/omega-memory/SKILL.md` for the agent-facing MCP usage workflow
+5. Relevant source files under `src/omega/`
+6. Relevant tests under `tests/`
 
 The rest of `docs/` contains upstream product documentation, generated site
 content, public-facing guides, and Pro feature references. Those files are
@@ -49,6 +50,8 @@ Iteration 1 focuses on core memory retrieval for agents:
 - optional related-memory expansion;
 - retrieval profiles for common agent intents.
 - project context packs via `omega_context`.
+- agent-facing MCP startup/schema/skill guidance so future agents know how to
+  discover and use the new retrieval tools in long-context coding tasks.
 
 The development implementation is complete on `dev/retrieval-tools`; live
 promotion remains separate and must follow
@@ -106,6 +109,9 @@ retrieval change is complete if the focused test path was skipped.
 - Return stable IDs, full content when requested, metadata, truncation status,
   and omitted IDs explicitly.
 - Enforce output budgets when returning full content or prompt-ready context.
+- Keep agent-facing guidance current in `src/omega/server/mcp_server.py`,
+  `src/omega/server/tool_schemas.py`, and `skills/omega-memory/SKILL.md`
+  whenever retrieval tool behavior changes.
 - Keep Pro-feature research independent; do not copy proprietary internals.
 
 ## Git Hygiene
