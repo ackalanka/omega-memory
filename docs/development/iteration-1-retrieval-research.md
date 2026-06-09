@@ -17,6 +17,10 @@ Implementation progress:
   profiles, profile event-type expansion, phrase fallback for selected
   profiles, dedupe, budgeted full-content packing, JSON/markdown output, and
   optional related expansion.
+- Full and paginated browse implemented in the current development slice:
+  `omega_query(mode="browse")` preserves default markdown previews while
+  adding SQL-backed `offset`, JSON output, `content_mode`, `preview_chars`,
+  `include_metadata`, and full-content budget reporting.
 
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
@@ -372,22 +376,37 @@ Verified behavior in this slice:
 
 ### P1. Full and paginated browse
 
+Implementation status: implemented in the current development slice.
+
 Purpose: make browse useful when the agent does not know exact query terms.
 
 Schema additions:
 
-- `offset` or `cursor`;
+- `offset`;
 - `content_mode`;
 - `preview_chars`;
 - `format`;
 - `include_metadata`;
-- filters already available on semantic query should be reused where feasible.
+- `budget_chars`;
+- `browse_by`, `event_type`, and `session_id` filters remain as before.
 
 Return contract:
 
 - default remains current preview behavior;
 - JSON mode returns `items`, `limit`, `offset`, `next_offset`, `has_more`;
 - full mode honors budget.
+
+Verified behavior in this slice:
+
+- default `omega_query(mode="browse")` still returns markdown previews without
+  structured-control fields;
+- `format="json"` returns stable browse payloads with `items`, pagination,
+  filters, metadata defaults, and content budget metadata;
+- `offset` is implemented in the SQLite browse helpers for recent/type/session
+  browse rather than by slicing only in the MCP handler;
+- `content_mode="preview"` honors `preview_chars`;
+- `content_mode="full"` honors `budget_chars` and reports truncation;
+- `content_mode="none"` preserves IDs and metadata while omitting body text.
 
 ### P1. Related-memory expansion
 
@@ -456,6 +475,8 @@ most natural expansions.
 8. Add tests for each recall profile, truncation, omitted IDs, and JSON shape.
    Covered by `tests/test_recall_handler.py`.
 9. Extend browse with JSON, pagination, and content modes.
+   Completed in current development slice and covered by
+   `tests/test_browse_structured_output.py`.
 10. Add related expansion to get/recall. Completed for `get` and `recall`;
     browse remains separate.
 

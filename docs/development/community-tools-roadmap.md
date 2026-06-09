@@ -195,7 +195,9 @@ Why third:
 
 Priority: P1.
 
-Status: not started.
+Status: implemented in the current development slice; verify before promotion
+with `tests/test_browse_structured_output.py` plus the existing browse and
+query compatibility tests.
 
 Improve `omega_query(mode="browse")`.
 
@@ -208,16 +210,20 @@ omega_query(mode="browse", browse_by="recent", content_mode="full")
 
 Recommended arguments:
 
-- `offset` or `cursor`.
+- `offset`: zero-based SQL-backed offset.
 - `content_mode`: `preview`, `full`, or `none`.
 - `preview_chars`.
 - `format`: `markdown` or `json`.
+- `include_metadata`: defaults true for JSON and false for markdown.
+- `budget_chars`: global content budget for `content_mode="full"`.
 
 Expected behavior:
 
 - Keep existing browse behavior by default.
 - Support paging through large result sets.
 - Let agents inspect full long memories when browsing by type/session/recent.
+- Return JSON payloads with `items`, `limit`, `offset`, `next_offset`,
+  `has_more`, filters, and content budget/truncation metadata.
 
 Why fourth:
 

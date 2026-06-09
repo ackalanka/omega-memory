@@ -282,6 +282,74 @@ def _memory_result_to_dict(
     return payload
 
 
+def _apply_memory_result_content_controls(
+    nodes: list[Any],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+    include_metadata: bool,
+) -> tuple[list[dict], dict]:
+    """Apply content controls and budget to MemoryResult-like nodes."""
+    remaining = budget_chars if content_mode == "full" else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_content_ids = []
+    controlled = []
+
+    for node in nodes:
+        record = _memory_result_to_dict(
+            node,
+            include_metadata=include_metadata,
+            content_mode="full",
+            preview_chars=preview_chars,
+        )
+        original_content = str(record.get("content") or "")
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+        elif content_mode == "preview":
+            if len(original_content) > preview_chars:
+                record["content"] = original_content[:preview_chars]
+                record["content_truncated"] = True
+                truncated_ids.append(record["id"])
+            else:
+                record["content"] = original_content
+            budget_used += len(record.get("content") or "")
+        else:
+            if remaining is None:
+                record["content"] = original_content
+                budget_used += len(original_content)
+            elif remaining <= 0:
+                record["content"] = ""
+                record["content_truncated"] = True
+                record["content_omitted_due_to_budget"] = True
+                omitted_content_ids.append(record["id"])
+            elif len(original_content) > remaining:
+                record["content"] = original_content[:remaining]
+                record["content_truncated"] = True
+                record["budget_truncated"] = True
+                truncated_ids.append(record["id"])
+                budget_used += remaining
+                remaining = 0
+            else:
+                record["content"] = original_content
+                budget_used += len(original_content)
+                remaining -= len(original_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_content_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_content_ids),
+    }
+
+
 def _format_memory_record_markdown(record: dict, index: int | None = None) -> str:
     """Render a memory retrieval record as compact markdown."""
     prefix = f"## {index}. " if index is not None else "## "
@@ -1624,33 +1692,104 @@ async def handle_omega_browse(arguments: dict) -> dict:
     """Browse memories by type, session, or most recent."""
     browse_by = arguments.get("browse_by", "recent")
     limit = _clamp_int(arguments.get("limit", 20), default=20, max_val=200)
+    offset = _clamp_int(arguments.get("offset", 0), default=0, min_val=0, max_val=100000)
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+    preview_chars = _clamp_int(arguments.get("preview_chars", 200), default=200, min_val=0, max_val=10000)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 30000), default=30000, min_val=0, max_val=200000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    structured_requested = any(
+        key in arguments
+        for key in ("offset", "format", "content_mode", "preview_chars", "budget_chars", "include_metadata")
+    )
 
     try:
         from omega.bridge import _get_store
 
         db = _get_store()
+        fetch_limit = min(limit + 1, 201)
 
         if browse_by == "type":
             event_type = arguments.get("event_type")
             if not event_type:
                 return mcp_error("event_type is required when browse_by='type'")
-            results = db.get_by_type(event_type, limit=limit)
+            results = db.get_by_type(event_type, limit=fetch_limit, offset=offset)
             title = f"Memories of type '{event_type}'"
         elif browse_by == "session":
             session_id = _validate_session_id(arguments.get("session_id"))
             if not session_id:
                 return mcp_error("session_id is required when browse_by='session'")
-            results = db.get_by_session(session_id, limit=limit)
+            results = db.get_by_session(session_id, limit=fetch_limit, offset=offset)
             title = f"Memories from session '{session_id[:16]}...'"
         else:  # recent
-            results = db.get_recent(limit=limit)
+            results = db.get_recent(limit=fetch_limit, offset=offset)
             title = "Most recent memories"
 
-        if not results:
+        page_nodes = results[:limit]
+        has_more = len(results) > limit
+        next_offset = offset + limit if has_more else None
+
+        if structured_requested:
+            records, content_meta = _apply_memory_result_content_controls(
+                page_nodes,
+                content_mode=content_mode,
+                preview_chars=preview_chars,
+                budget_chars=budget_chars if content_mode == "full" else None,
+                include_metadata=bool(include_metadata),
+            )
+            payload = {
+                "mode": "browse",
+                "browse_by": browse_by,
+                "title": title,
+                "items": records,
+                "count": len(records),
+                "limit": limit,
+                "offset": offset,
+                "next_offset": next_offset,
+                "has_more": has_more,
+                "content": {
+                    "content_mode": content_mode,
+                    "preview_chars": preview_chars if content_mode == "preview" else None,
+                    "budget_chars": budget_chars if content_mode == "full" else None,
+                    **content_meta,
+                },
+                "filters": {
+                    "event_type": arguments.get("event_type") if browse_by == "type" else None,
+                    "session_id": arguments.get("session_id") if browse_by == "session" else None,
+                },
+            }
+            if output_format == "json":
+                return mcp_response(json.dumps(payload, indent=2))
+
+            if not records:
+                return mcp_response(f"# {title}\n\n*No memories found.*")
+
+            lines = [
+                f"# {title} ({len(records)} results)",
+                f"Offset: {offset} | Limit: {limit} | Has more: {str(has_more).lower()}",
+                "",
+            ]
+            for i, record in enumerate(records, offset + 1):
+                lines.append(_format_memory_record_markdown(record, i))
+                lines.append("")
+            if content_meta.get("content_omitted_ids"):
+                lines.append(
+                    "Content omitted due to budget: "
+                    + ", ".join(f"`{rid}`" for rid in content_meta["content_omitted_ids"])
+                )
+            return mcp_response("\n".join(lines).rstrip())
+
+        if not page_nodes:
             return mcp_response(f"# {title}\n\n*No memories found.*")
 
-        output = f"# {title} ({len(results)} results)\n\n"
-        for i, node in enumerate(results, 1):
+        output = f"# {title} ({len(page_nodes)} results)\n\n"
+        for i, node in enumerate(page_nodes, 1):
             etype = (node.metadata or {}).get("event_type", "memory")
             preview = node.content[:200] + "..." if len(node.content) > 200 else node.content
             created = node.created_at.isoformat()[:16] if node.created_at else ""

@@ -404,36 +404,38 @@ class SearchMixin:
     # ------------------------------------------------------------------
 
     def get_by_type(
-        self, event_type: str, limit: int = 100, entity_id: Optional[str] = None
+        self, event_type: str, limit: int = 100, entity_id: Optional[str] = None, offset: int = 0
     ) -> List[MemoryResult]:
         """Get memories by event type, sorted by recency."""
+        offset = max(0, int(offset or 0))
         if entity_id:
             rows = self._conn.execute(
                 """SELECT node_id, content, metadata, created_at,
                           access_count, last_accessed, ttl_seconds
                    FROM memories WHERE event_type = ?
                    AND (entity_id = ? OR entity_id IS NULL)
-                   ORDER BY created_at DESC LIMIT ?""",
-                (event_type, entity_id, limit),
+                   ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (event_type, entity_id, limit, offset),
             ).fetchall()
         else:
             rows = self._conn.execute(
                 """SELECT node_id, content, metadata, created_at,
                           access_count, last_accessed, ttl_seconds
                    FROM memories WHERE event_type = ?
-                   ORDER BY created_at DESC LIMIT ?""",
-                (event_type, limit),
+                   ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+                (event_type, limit, offset),
             ).fetchall()
         return [self._row_to_result(row) for row in rows]
 
-    def get_by_session(self, session_id: str, limit: int = 100) -> List[MemoryResult]:
+    def get_by_session(self, session_id: str, limit: int = 100, offset: int = 0) -> List[MemoryResult]:
         """Get memories by session ID, sorted by recency."""
+        offset = max(0, int(offset or 0))
         rows = self._conn.execute(
             """SELECT node_id, content, metadata, created_at,
                       access_count, last_accessed, ttl_seconds
                FROM memories WHERE session_id = ?
-               ORDER BY created_at DESC LIMIT ?""",
-            (session_id, limit),
+               ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            (session_id, limit, offset),
         ).fetchall()
         return [self._row_to_result(row) for row in rows]
 
@@ -775,13 +777,14 @@ class SearchMixin:
 
         return list(results.values())[:limit]
 
-    def get_recent(self, limit: int = 10) -> List[MemoryResult]:
+    def get_recent(self, limit: int = 10, offset: int = 0) -> List[MemoryResult]:
         """Get most recent memories."""
+        offset = max(0, int(offset or 0))
         rows = self._conn.execute(
             """SELECT node_id, content, metadata, created_at,
                       access_count, last_accessed, ttl_seconds
-               FROM memories ORDER BY created_at DESC LIMIT ?""",
-            (limit,),
+               FROM memories ORDER BY created_at DESC LIMIT ? OFFSET ?""",
+            (limit, offset),
         ).fetchall()
         return [self._row_to_result(row) for row in rows]
 
