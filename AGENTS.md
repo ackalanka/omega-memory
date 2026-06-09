@@ -28,9 +28,10 @@ order:
 1. `docs/development/live-safe-development.md`
 2. `docs/development/community-tools-roadmap.md`
 3. `docs/development/iteration-1-retrieval-research.md`
-4. `skills/omega-memory/SKILL.md` for the agent-facing MCP usage workflow
-5. Relevant source files under `src/omega/`
-6. Relevant tests under `tests/`
+4. `docs/development/iteration-1-future-session-handoff.md`
+5. `skills/omega-memory/SKILL.md` for the agent-facing MCP usage workflow
+6. Relevant source files under `src/omega/`
+7. Relevant tests under `tests/`
 
 The rest of `docs/` contains upstream product documentation, generated site
 content, public-facing guides, and Pro feature references. Those files are
@@ -55,7 +56,9 @@ Iteration 1 focuses on core memory retrieval for agents:
 
 The development implementation is complete on `dev/retrieval-tools`; live
 promotion remains separate and must follow
-`docs/development/live-safe-development.md`.
+`docs/development/live-safe-development.md`. For a future-session checklist,
+completed work, and remaining work, read
+`docs/development/iteration-1-future-session-handoff.md`.
 
 Do not start router, oracle, coordination, cloud sync, federation, encrypted
 profile, or full knowledge-base work unless the user explicitly changes the

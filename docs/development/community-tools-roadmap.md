@@ -56,8 +56,11 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 Status: implementation complete in the development checkout. Live promotion is
 still pending and must follow `docs/development/live-safe-development.md`.
-Latest pushed development head: `54d311b` (`fix: normalize related memory
-ids`).
+Last verified code head recorded for this implementation: `54d311b`
+(`fix: normalize related memory ids`). The branch can move after that; always
+run `git log --oneline --decorate -12` before relying on a specific head.
+Future-session completed-vs-remaining details are maintained in
+`docs/development/iteration-1-future-session-handoff.md`.
 Agent-facing MCP discovery and usage guidance is also part of Iteration 1:
 startup instructions, `omega_protocol`, managed client setup fragments,
 condensed-mode meta-tool descriptions and discovery output, and
@@ -357,6 +360,10 @@ Latest development verification on `54d311b`:
 - `OMEGA_HOME=/tmp/omega-memory-dev-promotion-home .venv/bin/python scripts/retrieval_promotion_smoke.py`
   passed with `status: ok`, `tool_count: 17`, `query_results: 2`,
   `browse_count: 1`, `recall_results: 3`, and `context_items: 5`.
+
+For the detailed future-session checklist, live-promotion remaining work, and
+post-promotion engineering follow-ups, see
+`docs/development/iteration-1-future-session-handoff.md`.
 
 Iteration 1 is complete when:
 

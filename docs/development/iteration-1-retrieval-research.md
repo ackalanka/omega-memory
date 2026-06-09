@@ -3,8 +3,12 @@
 Captured: 2026-06-09T08:15:46Z.
 
 Status: research complete; development implementation complete on branch
-`dev/retrieval-tools`; live promotion pending. Latest pushed development head:
-`54d311b` (`fix: normalize related memory ids`).
+`dev/retrieval-tools`; live promotion pending. Last verified code head recorded
+for this implementation: `54d311b` (`fix: normalize related memory ids`). The
+branch can move after that; always run `git log --oneline --decorate -12`
+before relying on a specific head. Future-session completed-vs-remaining
+details are maintained in
+`docs/development/iteration-1-future-session-handoff.md`.
 
 Implementation progress:
 
@@ -41,6 +45,9 @@ Implementation progress:
 Worktree: `/home/akalanka/projects/omega-memory-dev`.
 
 Live safety reference: see `docs/development/live-safe-development.md`.
+
+Future-session handoff: see
+`docs/development/iteration-1-future-session-handoff.md`.
 
 ## Objective
 
