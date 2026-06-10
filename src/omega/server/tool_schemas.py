@@ -170,7 +170,7 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_recall",
-        "description": "Search, hydrate, and pack relevant memories into a budgeted prompt-ready context block. Use when an agent needs enough retrieved memory content to act, not just search previews.",
+        "description": "Search, hydrate, and pack relevant memories into a budgeted prompt-ready context block. Use when an agent needs enough retrieved memory content to act, not just search previews. Output separates records into two fields: `results` now contains only ranked semantic search records. Constraint and preference records are no longer included here. `constraints` is a new dedicated output field containing auto-injected constraint and preference records. Version boundary note: constraints field added in dev/retrieval-tools; results now contains only ranked search records.",
         "inputSchema": {
             "type": "object",
             "properties": {
