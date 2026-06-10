@@ -15,7 +15,6 @@ Organized into ten sections:
   9. Feedback Loop — helpful/outdated ratings
   10. Content Safety — blocklist, min-length, path traversal
 """
-import json
 import re
 import sys
 import pytest

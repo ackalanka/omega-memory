@@ -240,14 +240,14 @@ class TestOmegaRecallOutput:
     async def test_constraint_records_do_not_displace_semantic_results(self):
         from omega.bridge import store
 
-        # Store 2 constraint/preference memories
-        store(content="Always use pytest for testing.", event_type="constraint", metadata={"tags": ["f5-test"]})
-        store(content="Prefer descriptive test names.", event_type="user_preference", metadata={"tags": ["f5-test"]})
+        # Store 2 constraint memories
+        store(content="Always use pytest for testing", event_type="constraint", metadata={"tags": ["f5-test"]})
+        store(content="Prefer descriptive test names for testing", event_type="constraint", metadata={"tags": ["f5-test"]})
         
-        # Store 3 semantic memories
-        store(content="Semantic memory A about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
-        store(content="Semantic memory B about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
-        store(content="Semantic memory C about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
+        # Store 3 distinct semantic memories
+        store(content="Semantic memory A about testing the recall handler logic.", event_type="memory", metadata={"tags": ["f5-test"]})
+        store(content="Semantic memory B about testing the core system infrastructure.", event_type="memory", metadata={"tags": ["f5-test"]})
+        store(content="Semantic memory C about testing the SQLite bridge connection.", event_type="memory", metadata={"tags": ["f5-test"]})
 
         result = await handle_omega_recall({
             "query": "semantic memory about testing",
@@ -265,4 +265,25 @@ class TestOmegaRecallOutput:
         # We should still get our 3 semantic results, not displaced by constraints
         assert len(payload["results"]) == 3
         assert all(r.get("event_type") not in ("constraint", "user_preference") for r in payload["results"])
+
+    @pytest.mark.asyncio
+    async def test_zero_result_output_shape(self):
+        # Do not store anything, ensuring 0 results
+        result = await handle_omega_recall({
+            "query": "something totally non existent",
+            "limit": 3,
+            "format": "json"
+        })
+
+        assert not _is_error(result)
+        payload = json.loads(_text(result))
+
+        # F6 expectation: output shape holds up even with 0 results
+        assert payload["result_count"] == 0
+        assert payload["results"] == []
+        assert payload["constraints"] == []
+        assert "budget" in payload
+        assert "truncated" in payload
+        assert "omitted" in payload
+        assert payload["budget"]["content_budget_used"] == 0
 

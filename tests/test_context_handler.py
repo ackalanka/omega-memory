@@ -140,6 +140,24 @@ class TestOmegaContextOutput:
         assert any("SQLite lock debug lesson" in item["content"] for item in payload["sections"][0]["items"])
 
     @pytest.mark.asyncio
+    async def test_context_pack_retains_unscoped_memories_for_focused_queries(self):
+        _store_context_memory("Unscoped global memory", "decision", project="")
+        _store_context_memory("Scoped project memory", "decision", project=PROJECT)
+
+        result = await handle_omega_context({
+            "project": PROJECT,
+            "mode": "debug",
+            "query": "Unscoped global memory",
+            "format": "json",
+        })
+
+        assert not _is_error(result)
+        payload = json.loads(_text(result))
+        
+        # The unscoped memory should survive the post-filter
+        assert any("Unscoped global memory" in item["content"] for item in payload["sections"][0]["items"])
+
+    @pytest.mark.asyncio
     async def test_context_pack_respects_status_filter(self):
         _store_context_memory("Active decision survives", "decision")
         _store_context_memory("Archived decision filtered by default", "decision", status="archived")

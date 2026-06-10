@@ -3,7 +3,6 @@
 import json
 from unittest.mock import patch, MagicMock
 
-import pytest
 
 
 def test_quality_gate_skips_short_sessions():

@@ -243,7 +243,6 @@ class TestContradictionOnStore:
             original = mod.SQLiteStore._check_contradictions
 
             def patched_check(self_store, new_node_id, new_content, embedding):
-                from omega.contradictions import detect_contradictions as real_detect
                 # Patch the function that gets imported inside
                 with patch("omega.contradictions.detect_contradictions", return_value=[mock_result]):
                     original(self_store, new_node_id, new_content, embedding)

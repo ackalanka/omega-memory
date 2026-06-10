@@ -8,7 +8,6 @@ import os
 import pytest
 
 from omega.bridge import (
-    auto_capture,
     clear_session,
     delete_memory,
     edit_memory,

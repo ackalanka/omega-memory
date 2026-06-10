@@ -4,7 +4,6 @@ import sys
 from pathlib import Path
 from unittest.mock import patch
 
-import pytest
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -237,7 +236,7 @@ class TestAtomicFactSplitting:
 
     def test_fact_graph_edge_in_auto_capture(self, store, tmp_omega_dir):
         """Fact nodes created by auto_capture should have edges to parent."""
-        from omega.bridge import auto_capture, _get_store
+        from omega.bridge import auto_capture
         import omega.bridge as bridge
 
         # Point bridge to our test store
@@ -276,8 +275,6 @@ class TestCorpusHygiene:
 
     def test_corpus_hygiene_dedup(self, store):
         """Near-duplicate memories should be superseded by hygiene."""
-        from omega.bridge import _get_store
-        from omega.embedding import generate_embedding
 
         # Store two very similar memories
         nid1 = store.store(

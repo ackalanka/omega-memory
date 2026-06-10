@@ -9,7 +9,6 @@ import pytest
 from unittest.mock import patch
 
 from omega.sqlite_store import SQLiteStore
-from omega.sqlite_store._query import ADAPTIVE_RETRY_THRESHOLD
 
 
 @pytest.fixture

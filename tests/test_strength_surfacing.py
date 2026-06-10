@@ -1,6 +1,5 @@
 """Tests for strength surfacing in query results."""
 import pytest
-from omega.sqlite_store import SQLiteStore
 
 
 class TestStrengthField:

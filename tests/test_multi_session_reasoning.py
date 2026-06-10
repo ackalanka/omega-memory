@@ -8,13 +8,11 @@ C. Automatic temporal range inference (created_at fallback + soft mode)
 
 import importlib.util
 import os
-import re
 from datetime import datetime, timedelta, timezone
-from unittest.mock import patch
 
 import pytest
 
-from omega.sqlite_store import SQLiteStore, MemoryResult
+from omega.sqlite_store import SQLiteStore
 
 
 # ============================================================================

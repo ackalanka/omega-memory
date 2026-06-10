@@ -7,11 +7,9 @@ P4: Temporal indexing and retrieval channel
 P5: Structured fact extraction at indexing
 P6: Graph-based multi-hop retrieval
 """
-import json
-import pytest
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
-from omega.sqlite_store import SQLiteStore, SCHEMA_VERSION, MemoryResult
+from omega.sqlite_store import SQLiteStore, SCHEMA_VERSION
 
 
 # ============================================================================
