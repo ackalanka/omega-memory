@@ -131,6 +131,12 @@ omega_recall("restore workflow decisions", profile="implementation", expand_rela
 
 Prefer `omega_recall` over chaining several broad queries when context is long.
 It returns the searches used, selected IDs, omitted IDs, and truncation status.
+From v1.1.0 onwards, the structured JSON payload separates output:
+- Ranked search results are in the `results` array.
+- Active constraints and preferences are in a separate `constraints` array.
+- Agents should read `constraints` for behavioral rules and `results` for context relevant to the current query.
+- Do not look for constraints inside `results` — they will not be there.
+
 When `expand_related=true`, related memories are ordered deterministically by
 nearest hop, strongest edge weight, edge-type priority, newest edge timestamp,
 then stable memory ID.
