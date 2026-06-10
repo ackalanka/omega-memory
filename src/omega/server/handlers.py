@@ -704,6 +704,15 @@ def _record_from_memory_result(node: Any, *, include_metadata: bool, retrieval_s
     return record
 
 
+# NOTE(F4-pre-promotion): _pack_recall_records operates on a different content
+# model than the other three content-control functions
+# (_apply_query_content_controls, _apply_get_record_content_controls,
+# _apply_context_record_content_controls). Those functions support both preview
+# and full content modes and track budget_used in both. This function supports
+# full-content hydration only, driven by budget_chars, with no preview path.
+# This is architecturally intentional for the query-then-hydrate recall model.
+# If these four functions are ever unified into a shared ContentBudget class,
+# this difference must be preserved. See docs/development/bugfix-pre-promotion.md TD-002.
 def _pack_recall_records(
     records: list[dict],
     *,
