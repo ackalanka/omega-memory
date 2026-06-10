@@ -375,6 +375,19 @@ This is important because MCP clients do not rely on repository docs alone.
 Agents see tool schemas, descriptions, startup instructions, `omega_protocol`,
 and local skills. Those surfaces must stay synchronized with behavior.
 
+### Completed: Pre-Promotion Bug Fixes (F1-F6)
+
+Implemented fixes for all findings from the pre-promotion review:
+
+- **F1 (Recall Constraint Separation)**: Injected constraints and preferences in recall now output to a separate `constraints` JSON array and markdown block, preventing them from displacing primary semantic results.
+- **F2 (Recall N+1 queries)**: Deferred. N+1 profile queries do not impact correctness and will be optimized post-promotion.
+- **F3 (Context Query Post-Filter)**: Fixed post-filter in `handle_omega_context` to properly allow unscoped memories (where `project` is empty/null) through, matching SQLite behavior.
+- **F4 (Recall Content Model Divergence)**: Added explanatory inline documentation to `_pack_recall_records` detailing why recall forces `content_mode="full"` and lacks a preview path compared to other handlers.
+- **F5 (Recall Sort Key Bug)**: Resolved edge cases in recall sorting that could cause deduplication exceptions, verified by regression tests.
+- **F6 (Zero-Result Output Shape Test)**: Confirmed as a false positive. Added `test_zero_result_output_shape` to explicitly verify that the JSON payload shape remains structurally intact with empty arrays (`[]`) when there are 0 results.
+
+See `bugfix-pre-promotion.md` and `adr-001-recall-constraint-separation.md` for extended details.
+
 ### Completed: Isolated Promotion Smoke
 
 Implemented:
@@ -682,3 +695,29 @@ At the next session, do this in order:
 9. Commit after each successful slice.
 10. Never disturb live OMEGA unless the user explicitly asks for promotion or
     live installation work.
+
+## Pre-Promotion Hardening — 2026-06-11
+
+Bug fixes and documentation applied to dev/retrieval-tools before live
+promotion. Full evidence and fix records in
+`docs/development/bugfix-pre-promotion.md`.
+
+### Fixed
+- **F1 — Constraint Separation in omega_recall** — Commit: 687ed8a
+  ADR: `docs/development/adr-001-recall-constraint-separation.md`
+- **F3 — Context Focused Query Post-Filter** — Commit: 687ed8a
+  Covers handle_omega_query, handle_omega_recall, handle_omega_context.
+- **F4 — Content Model Comment in _pack_recall_records** — Commit: 2c0a87d
+- **F5 — Constraint/Limit Interaction Test** — Commit: 01631e8
+- **F6 — Zero-Result Output Shape Test** — Commit: 4f05169
+
+### Deferred
+- **F2 — N+1 Profile Queries** — See TD-001 in bugfix-pre-promotion.md.
+
+### Test Count
+- Baseline before hardening: 88 tests
+- Post-hardening: 91 tests
+
+### Promotion Readiness
+All items above are complete. Run the verification gate below before
+merging to live checkout.
