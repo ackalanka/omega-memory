@@ -528,10 +528,11 @@ def _format_content_control_footer(content_meta: dict) -> str:
 def _query_record_base(record: dict, include_metadata: bool) -> dict:
     """Normalize bridge.query_structured records for MCP output."""
     metadata = dict(record.get("metadata") or {})
+    event_type = record.get("event_type") or metadata.get("event_type") or metadata.get("type") or "memory"
     normalized = {
         "id": record.get("id", ""),
         "content": record.get("content") or "",
-        "event_type": record.get("event_type") or metadata.get("event_type") or metadata.get("type") or "memory",
+        "event_type": event_type,
         "created_at": record.get("created_at"),
         "updated_at": metadata.get("updated_at"),
         "session_id": record.get("session_id") or metadata.get("session_id"),
@@ -547,8 +548,8 @@ def _query_record_base(record: dict, include_metadata: bool) -> dict:
         "_query_confidence": record.get("_query_confidence"),
         "valid_from": record.get("valid_from"),
         "valid_until": record.get("valid_until"),
-        "is_constraint": bool(record.get("is_constraint", False)),
-        "is_preference": bool(record.get("is_preference", False)),
+        "is_constraint": bool(record.get("is_constraint", False) or metadata.get("event_type") in ("constraint", "user_preference")),
+        "is_preference": bool(record.get("is_preference", False) or metadata.get("event_type") == "user_preference"),
     }
     if include_metadata:
         normalized["metadata"] = metadata
@@ -662,7 +663,7 @@ def _recall_record_sort_key(record: dict) -> tuple:
     )
 
 
-def _dedupe_recall_records(records: list[dict], limit: int) -> list[dict]:
+def _dedupe_recall_records(records: list[dict], limit: int) -> tuple[list[dict], list[dict]]:
     """Dedupe records by stable ID while merging retrieval source labels."""
     by_id: dict[str, dict] = {}
     for raw in records:
@@ -680,9 +681,15 @@ def _dedupe_recall_records(records: list[dict], limit: int) -> list[dict]:
         for key in ("strength", "relevance", "_query_confidence"):
             if raw.get(key) is not None and (existing.get(key) is None or raw[key] > existing[key]):
                 existing[key] = raw[key]
+        if raw.get("is_constraint"):
+            existing["is_constraint"] = True
+        if raw.get("is_preference"):
+            existing["is_preference"] = True
 
     deduped = sorted(by_id.values(), key=_recall_record_sort_key, reverse=True)
-    return deduped[:limit]
+    constraints = [r for r in deduped if r.get("is_constraint") or r.get("is_preference")]
+    semantics = [r for r in deduped if not (r.get("is_constraint") or r.get("is_preference"))]
+    return semantics[:limit], constraints
 
 
 def _record_from_memory_result(node: Any, *, include_metadata: bool, retrieval_source: str) -> dict:
@@ -720,6 +727,10 @@ def _pack_recall_records(
         record = dict(raw)
         original_content = str(record.get("content") or "")
         record["content_length"] = len(original_content)
+        # Recall intentionally diverges from search/context handlers by forcing
+        # content_mode to 'full' (with no 'preview' path). This is because recall's
+        # primary purpose is to surface exact, prompt-ready text to the agent for hydration,
+        # whereas browse/search prioritize high-density discovery.
         record["content_mode"] = "full"
         record["content_truncated"] = False
         record["content_omitted_due_to_budget"] = False
@@ -808,6 +819,7 @@ def _format_recall_context(
     profile_name: str,
     profile_description: str,
     records: list[dict],
+    constraints: list[dict],
     budget_meta: dict,
     searches_run: list[dict],
 ) -> str:
@@ -818,42 +830,79 @@ def _format_recall_context(
         f"Results: {len(records)} | Budget: {budget_meta['content_budget_used']}/{budget_meta['budget_chars']} chars",
         "",
     ]
-    if not records:
+    if not records and not constraints:
         lines.append("*No matching memories found.*")
         return "\n".join(lines)
 
-    for i, record in enumerate(records, 1):
-        sources = ", ".join(record.get("retrieval_sources") or [])
-        header = f"## {i}. [{record.get('event_type', 'memory')}] `{record.get('id')}`"
-        if sources:
-            header += f" ({sources})"
-        lines.append(header)
-        lines.append(
-            f"Strength: {record.get('strength')} | Relevance: {record.get('relevance')} | "
-            f"Created: {record.get('created_at') or ''}"
-        )
-        project = record.get("project")
-        session_id = record.get("session_id")
-        if project or session_id:
-            lines.append(f"Project: {project or ''} | Session: {session_id or ''}")
-        lines.append("")
-        lines.append(str(record.get("content") or ""))
-        if record.get("content_truncated"):
+    if records:
+        for i, record in enumerate(records, 1):
+            sources = ", ".join(record.get("retrieval_sources") or [])
+            header = f"## {i}. [{record.get('event_type', 'memory')}] `{record.get('id')}`"
+            if sources:
+                header += f" ({sources})"
+            lines.append(header)
+            lines.append(
+                f"Strength: {record.get('strength')} | Relevance: {record.get('relevance')} | "
+                f"Created: {record.get('created_at') or ''}"
+            )
+            project = record.get("project")
+            session_id = record.get("session_id")
+            if project or session_id:
+                lines.append(f"Project: {project or ''} | Session: {session_id or ''}")
             lines.append("")
-            lines.append(f"*Content truncated from {record.get('content_length', 0)} characters.*")
-        if record.get("related"):
+            lines.append(str(record.get("content") or ""))
+            if record.get("content_truncated"):
+                lines.append("")
+                lines.append(f"*Content truncated from {record.get('content_length', 0)} characters.*")
+            if record.get("related"):
+                lines.append("")
+                lines.append("Related:")
+                for related in record["related"]:
+                    lines.append(
+                        f"- [{related.get('event_type', 'memory')}] `{related.get('id')}` "
+                        f"hop={related.get('hop')} edge={related.get('edge_type')} weight={related.get('weight')}"
+                    )
+                    if related.get("content"):
+                        lines.append(f"  {related['content']}")
+                    if related.get("content_truncated"):
+                        lines.append("  *Related content truncated.*")
             lines.append("")
-            lines.append("Related:")
-            for related in record["related"]:
-                lines.append(
-                    f"- [{related.get('event_type', 'memory')}] `{related.get('id')}` "
-                    f"hop={related.get('hop')} edge={related.get('edge_type')} weight={related.get('weight')}"
-                )
-                if related.get("content"):
-                    lines.append(f"  {related['content']}")
-                if related.get("content_truncated"):
-                    lines.append("  *Related content truncated.*")
+
+    if constraints:
+        lines.append("## Active Constraints")
         lines.append("")
+        for j, record in enumerate(constraints, 1):
+            sources = ", ".join(record.get("retrieval_sources") or [])
+            header = f"### {j}. [{record.get('event_type', 'memory')}] `{record.get('id')}`"
+            if sources:
+                header += f" ({sources})"
+            lines.append(header)
+            lines.append(
+                f"Strength: {record.get('strength')} | Relevance: {record.get('relevance')} | "
+                f"Created: {record.get('created_at') or ''}"
+            )
+            project = record.get("project")
+            session_id = record.get("session_id")
+            if project or session_id:
+                lines.append(f"Project: {project or ''} | Session: {session_id or ''}")
+            lines.append("")
+            lines.append(str(record.get("content") or ""))
+            if record.get("content_truncated"):
+                lines.append("")
+                lines.append(f"*Content truncated from {record.get('content_length', 0)} characters.*")
+            if record.get("related"):
+                lines.append("")
+                lines.append("Related:")
+                for related in record["related"]:
+                    lines.append(
+                        f"- [{related.get('event_type', 'memory')}] `{related.get('id')}` "
+                        f"hop={related.get('hop')} edge={related.get('edge_type')} weight={related.get('weight')}"
+                    )
+                    if related.get("content"):
+                        lines.append(f"  {related['content']}")
+                    if related.get("content_truncated"):
+                        lines.append("  *Related content truncated.*")
+            lines.append("")
 
     if budget_meta.get("content_omitted_ids"):
         lines.append("Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in budget_meta["content_omitted_ids"]))
@@ -1599,6 +1648,12 @@ async def handle_omega_query(arguments: dict) -> dict:
                     budget_chars=budget_chars,
                     include_metadata=bool(include_metadata),
                 )
+                if not include_constraints:
+                    for r in controlled_records:
+                        r["is_constraint"] = False
+                if not include_preferences:
+                    for r in controlled_records:
+                        r["is_preference"] = False
                 confidence_values = [
                     record.get("_query_confidence")
                     for record in controlled_records
@@ -1843,21 +1898,42 @@ async def handle_omega_recall(arguments: dict) -> dict:
                     "error": str(e),
                 })
 
-        selected = _dedupe_recall_records(candidates, limit=limit)
-        packed_records, budget_meta = _pack_recall_records(
-            selected,
+        selected_semantics, selected_constraints = _dedupe_recall_records(candidates, limit=limit)
+        
+        packed_constraints, constraint_budget_meta = _pack_recall_records(
+            selected_constraints,
             budget_chars=budget_chars,
             include_metadata=bool(include_metadata),
             expand_related=bool(expand_related),
             max_related=max_related,
             edge_types=edge_types,
         )
+        remaining_budget = max(0, budget_chars - constraint_budget_meta["content_budget_used"])
+
+        packed_records, budget_meta = _pack_recall_records(
+            selected_semantics,
+            budget_chars=remaining_budget,
+            include_metadata=bool(include_metadata),
+            expand_related=bool(expand_related),
+            max_related=max_related,
+            edge_types=edge_types,
+        )
+        
+        combined_budget_meta = {
+            "budget_chars": budget_chars,
+            "content_budget_used": constraint_budget_meta["content_budget_used"] + budget_meta["content_budget_used"],
+            "content_truncated": constraint_budget_meta["content_truncated"] or budget_meta["content_truncated"],
+            "content_truncated_ids": constraint_budget_meta["content_truncated_ids"] + budget_meta["content_truncated_ids"],
+            "content_omitted_ids": constraint_budget_meta["content_omitted_ids"] + budget_meta["content_omitted_ids"],
+        }
+
         context = _format_recall_context(
             query_text=query_text,
             profile_name=profile.name,
             profile_description=profile.description,
             records=packed_records,
-            budget_meta=budget_meta,
+            constraints=packed_constraints,
+            budget_meta=combined_budget_meta,
             searches_run=searches_run,
         )
         payload = {
@@ -1888,16 +1964,17 @@ async def handle_omega_recall(arguments: dict) -> dict:
             },
             "result_count": len(packed_records),
             "results": packed_records,
+            "constraints": packed_constraints,
             "context": context,
             "searches_run": searches_run,
             "omitted": {
-                "content_ids": budget_meta["content_omitted_ids"],
+                "content_ids": combined_budget_meta["content_omitted_ids"],
             },
             "truncated": {
-                "content": budget_meta["content_truncated"],
-                "content_ids": budget_meta["content_truncated_ids"],
+                "content": combined_budget_meta["content_truncated"],
+                "content_ids": combined_budget_meta["content_truncated_ids"],
             },
-            "budget": budget_meta,
+            "budget": combined_budget_meta,
         }
 
         if output_format == "json":
@@ -1985,7 +2062,8 @@ async def handle_omega_context(arguments: dict) -> dict:
                 )
             for raw in focused_candidates:
                 record = _query_record_base(raw, include_metadata=bool(include_metadata))
-                if record.get("project") != project:
+                record_project = record.get("project")
+                if record_project not in (project, None, ""):
                     continue
                 record_id = record.get("id")
                 if not record_id or record_id in focus_seen_ids:
