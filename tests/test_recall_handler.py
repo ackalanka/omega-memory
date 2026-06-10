@@ -235,3 +235,34 @@ class TestOmegaRecallOutput:
         assert [record["id"] for record in related] == [strong_id, weak_id]
         assert [record["edge_type"] for record in related] == ["supersedes", "related"]
         assert [record["weight"] for record in related] == [0.9, 0.2]
+
+    @pytest.mark.asyncio
+    async def test_constraint_records_do_not_displace_semantic_results(self):
+        from omega.bridge import store
+
+        # Store 2 constraint/preference memories
+        store(content="Always use pytest for testing.", event_type="constraint", metadata={"tags": ["f5-test"]})
+        store(content="Prefer descriptive test names.", event_type="user_preference", metadata={"tags": ["f5-test"]})
+        
+        # Store 3 semantic memories
+        store(content="Semantic memory A about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
+        store(content="Semantic memory B about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
+        store(content="Semantic memory C about testing.", event_type="memory", metadata={"tags": ["f5-test"]})
+
+        result = await handle_omega_recall({
+            "query": "semantic memory about testing",
+            "limit": 3,
+            "format": "json"
+        })
+
+        assert not _is_error(result)
+        payload = json.loads(_text(result))
+        
+        # F1 expectation: constraints are separated from primary results
+        assert "constraints" in payload
+        assert len(payload["constraints"]) >= 2
+        
+        # We should still get our 3 semantic results, not displaced by constraints
+        assert len(payload["results"]) == 3
+        assert all(r.get("event_type") not in ("constraint", "user_preference") for r in payload["results"])
+
