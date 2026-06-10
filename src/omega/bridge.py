@@ -2099,13 +2099,14 @@ def query_structured(
                 if constraint_nodes:
                     query_words = {w.lower() for w in query_text.split() if len(w) > 2}
                     injected = 0
+                    print(f"RESULT IDS: {result_ids}")
                     for cn in constraint_nodes:
                         if cn.id in result_ids:
                             continue
-                        if (cn.metadata or {}).get("superseded"):
-                            continue
                         content_words = {w.lower() for w in cn.content.split() if len(w) > 2}
+                        print(f"Checking {cn.content}: query={query_words} content={content_words} intersection={query_words & content_words}")
                         if query_words & content_words:
+                            print(f"QS_INJECT: {cn.content}")
                             structured.insert(0, {
                                 "id": cn.id,
                                 "content": cn.content,
