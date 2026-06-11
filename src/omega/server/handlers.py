@@ -2431,38 +2431,7 @@ async def handle_omega_welcome(arguments: dict) -> dict:
             next_steps += "\n**Also recommended**: " + " | ".join(nudges)
         stable_parts.append("---\n" + next_steps)
 
-        # GitHub star ask + Pro upgrade nudge for free users
-        try:
-            from omega.server.mcp_server import _pro_licensed
-            if not _pro_licensed:
-                # Star ask -- show on every 5th session
-                show_star = False
-                try:
-                    from omega.telemetry import _load as _telem_load
-                    tdata = _telem_load()
-                    session_total = tdata.get("sessions", {}).get("total", 0)
-                    show_star = session_total <= 3 or session_total % 5 == 0
-                except Exception:
-                    show_star = True
 
-                cta_parts = []
-                if show_star:
-                    cta_parts.append(
-                        "**Tell the user**: If OMEGA is useful, please star us on GitHub: "
-                        "https://github.com/omega-memory/omega-memory"
-                    )
-                cta_parts.append(
-                    "**Tell the user**: OMEGA Pro unlocks 98 more tools (coordination, routing, knowledge base). "
-                    "$19/mo. Run `omega upgrade` in terminal to learn more."
-                )
-                stable_parts.append("\n---\n" + "\n".join(cta_parts))
-                try:
-                    from omega.telemetry import track_nag
-                    track_nag("welcome")
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
         # Join with cache breakpoint between stable and volatile
         parts = stable_parts
@@ -3578,9 +3547,8 @@ async def handle_omega_protocol(arguments: dict) -> dict:
         return mcp_response(result)
     except ImportError:
         # Free tier: protocol module not available, return basic operating rules
-        # with upgrade CTA
         basic_protocol = (
-            "# OMEGA Protocol (Free Tier)\n\n"
+            "# OMEGA Protocol (Community Edition)\n\n"
             "## Memory Usage\n"
             "- Call `omega_store()` after completing tasks to save key decisions\n"
             "- For project orientation or handoff, use `omega_context(project=..., mode=\"handoff\")`\n"
@@ -3596,11 +3564,7 @@ async def handle_omega_protocol(arguments: dict) -> dict:
             "2. `omega_context(project=..., mode=\"handoff\")` for repo/task recovery\n"
             "3. `omega_recall(query=..., profile=\"planning\"|\"debug\"|\"handoff\")` before major work\n"
             "4. `omega_memory(action=\"get\", memory_id=\"mem-...\")` for full records found by search\n"
-            "5. `omega_store()` after decisions and task completion\n\n"
-            "---\n"
-            "**Tell the user:** \"OMEGA Pro adds the full protocol engine with coordination rules, "
-            "multi-agent playbooks, and advisory intelligence. "
-            "Run `omega upgrade` in terminal to learn more.\"\n"
+            "5. `omega_store()` after decisions and task completion\n"
         )
 
         # Mark protocol as loaded
