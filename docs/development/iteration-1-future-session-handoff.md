@@ -718,6 +718,15 @@ promotion. Full evidence and fix records in
 - Baseline before hardening: 88 tests
 - Post-hardening: 91 tests
 
-### Promotion Readiness
-All items above are complete. Run the verification gate below before
-merging to live checkout.
+### Final Gate Results (verified 2026-06-11)
+- ruff: clean
+- pytest: 91 passed, 0 failed
+- smoke: status: ok, tool_count: 17
+- Promotion gate path: /tmp/omega-memory-dev-promotion-home (canonical)
+- Commit range: 2f2f2b4..e113d8f
+
+### Note: F5 Commit Order
+The test test_constraint_records_do_not_displace_semantic_results was added
+in this hardening session. Commit order relative to the F1 fix was not
+verified. Do not assume this test was used as pre-fix evidence. Its value
+is as a permanent regression guard, not as historical diagnostic output.
