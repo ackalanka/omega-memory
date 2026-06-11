@@ -4,7 +4,6 @@ import math
 import pytest
 from datetime import datetime, timedelta, timezone
 
-from omega.sqlite_store import SQLiteStore
 
 
 # ============================================================================

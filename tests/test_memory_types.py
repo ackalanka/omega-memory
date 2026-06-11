@@ -1,6 +1,5 @@
 """Tests for memory type classification (episodic/semantic/procedural)."""
 import pytest
-import sqlite3
 from omega.sqlite_store import SQLiteStore
 
 
@@ -72,7 +71,6 @@ class TestMemoryTypeAutoClassify:
 
     def test_all_event_types_mapped(self, store):
         """Every key in _TYPE_WEIGHTS should be in _MEMORY_TYPE_MAP."""
-        from omega.sqlite_store import SQLiteStore
         for etype in SQLiteStore._TYPE_WEIGHTS:
             assert etype in SQLiteStore._MEMORY_TYPE_MAP, f"{etype} not in _MEMORY_TYPE_MAP"
 

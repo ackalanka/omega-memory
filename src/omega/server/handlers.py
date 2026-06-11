@@ -13,6 +13,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+from omega import json_compat as json
+
 logger = logging.getLogger("omega.server.handlers")
 
 # ---------------------------------------------------------------------------
@@ -217,6 +219,874 @@ def _validate_entity_id(entity_id: str | None) -> str | None:
 
 
 from omega.server.responses import mcp_response, mcp_error  # noqa: E402
+
+
+def _iso_or_none(value: Any) -> str | None:
+    """Return ISO text for datetimes while leaving missing values as None."""
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _content_payload(content: str, mode: str, preview_chars: int) -> tuple[str | None, bool]:
+    """Return content according to full/preview/none mode plus truncation state."""
+    if mode == "none":
+        return None, False
+    if mode == "preview" and len(content) > preview_chars:
+        return content[:preview_chars], True
+    return content, False
+
+
+def _memory_result_to_dict(
+    node: Any,
+    *,
+    include_metadata: bool = True,
+    content_mode: str = "full",
+    preview_chars: int = 800,
+) -> dict:
+    """Convert MemoryResult-like objects to a stable MCP retrieval payload."""
+    metadata = dict(getattr(node, "metadata", None) or {})
+    content = getattr(node, "content", "") or ""
+    rendered_content, truncated = _content_payload(content, content_mode, preview_chars)
+    event_type = metadata.get("event_type") or metadata.get("type") or "memory"
+
+    payload = {
+        "id": getattr(node, "id", ""),
+        "content": rendered_content,
+        "content_mode": content_mode,
+        "content_length": len(content),
+        "content_truncated": truncated,
+        "event_type": event_type,
+        "created_at": _iso_or_none(getattr(node, "created_at", None)),
+        "updated_at": metadata.get("updated_at"),
+        "session_id": metadata.get("session_id"),
+        "project": metadata.get("project"),
+        "entity_id": metadata.get("entity_id"),
+        "agent_type": metadata.get("agent_type"),
+        "tags": metadata.get("tags", []),
+        "status": getattr(node, "status", None) or metadata.get("status", "active"),
+        "source_uri": getattr(node, "source_uri", None) or metadata.get("source_uri"),
+        "derived_from": getattr(node, "derived_from", None) or metadata.get("derived_from"),
+        "strength": getattr(node, "strength", 0.0),
+        "relevance": getattr(node, "relevance", 0.0),
+        "access_count": getattr(node, "access_count", 0),
+        "last_accessed": _iso_or_none(getattr(node, "last_accessed", None)),
+        "valid_from": _iso_or_none(getattr(node, "valid_from", None)),
+        "valid_until": _iso_or_none(getattr(node, "valid_until", None)),
+        "ttl_seconds": getattr(node, "ttl_seconds", None),
+    }
+    if include_metadata:
+        payload["metadata"] = metadata
+    return payload
+
+
+def _apply_memory_result_content_controls(
+    nodes: list[Any],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+    include_metadata: bool,
+) -> tuple[list[dict], dict]:
+    """Apply content controls and budget to MemoryResult-like nodes."""
+    remaining = budget_chars if content_mode == "full" else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_content_ids = []
+    controlled = []
+
+    for node in nodes:
+        record = _memory_result_to_dict(
+            node,
+            include_metadata=include_metadata,
+            content_mode="full",
+            preview_chars=preview_chars,
+        )
+        original_content = str(record.get("content") or "")
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+        elif content_mode == "preview":
+            if len(original_content) > preview_chars:
+                record["content"] = original_content[:preview_chars]
+                record["content_truncated"] = True
+                truncated_ids.append(record["id"])
+            else:
+                record["content"] = original_content
+            budget_used += len(record.get("content") or "")
+        else:
+            if remaining is None:
+                record["content"] = original_content
+                budget_used += len(original_content)
+            elif remaining <= 0:
+                record["content"] = ""
+                record["content_truncated"] = True
+                record["content_omitted_due_to_budget"] = True
+                omitted_content_ids.append(record["id"])
+            elif len(original_content) > remaining:
+                record["content"] = original_content[:remaining]
+                record["content_truncated"] = True
+                record["budget_truncated"] = True
+                truncated_ids.append(record["id"])
+                budget_used += remaining
+                remaining = 0
+            else:
+                record["content"] = original_content
+                budget_used += len(original_content)
+                remaining -= len(original_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_content_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_content_ids),
+    }
+
+
+def _format_memory_record_markdown(record: dict, index: int | None = None) -> str:
+    """Render a memory retrieval record as compact markdown."""
+    prefix = f"## {index}. " if index is not None else "## "
+    lines = [f"{prefix}[{record.get('event_type', 'memory')}] `{record.get('id', '')}`"]
+    status = record.get("status")
+    if status and status != "active":
+        lines.append(f"Status: {status}")
+    for key, label in (
+        ("created_at", "Created"),
+        ("last_accessed", "Last accessed"),
+        ("project", "Project"),
+        ("session_id", "Session"),
+        ("entity_id", "Entity"),
+        ("agent_type", "Agent type"),
+        ("source_uri", "Source"),
+        ("derived_from", "Derived from"),
+        ("valid_from", "Valid from"),
+        ("valid_until", "Valid until"),
+    ):
+        value = record.get(key)
+        if value:
+            lines.append(f"{label}: {value}")
+    tags = record.get("tags") or []
+    if tags:
+        lines.append("Tags: " + ", ".join(str(tag) for tag in tags))
+    strength = record.get("strength")
+    relevance = record.get("relevance")
+    if strength is not None or relevance is not None:
+        score_bits = []
+        if strength is not None:
+            score_bits.append(f"Strength: {strength}")
+        if relevance is not None:
+            score_bits.append(f"Relevance: {relevance}")
+        lines.append(" | ".join(score_bits))
+    lines.append(
+        f"Access count: {record.get('access_count', 0)} | "
+        f"Content length: {record.get('content_length', 0)}"
+    )
+    if "metadata" in record and record["metadata"]:
+        metadata_summary = {
+            k: v
+            for k, v in record["metadata"].items()
+            if k not in {"event_type", "session_id", "project", "entity_id", "agent_type", "tags"}
+        }
+        if metadata_summary:
+            lines.append("Metadata: " + json.dumps(metadata_summary, sort_keys=True))
+    if record.get("content") is not None:
+        lines.append("")
+        lines.append(str(record.get("content", "")))
+        if record.get("content_truncated"):
+            lines.append("")
+            lines.append(
+                f"*Content truncated to {len(record.get('content') or '')} "
+                f"of {record.get('content_length', 0)} characters.*"
+            )
+    if record.get("related"):
+        lines.append("")
+        lines.append("Related:")
+        for related in record["related"]:
+            related_id = related.get("node_id") or related.get("id")
+            rel_content_value = related.get("content")
+            rel_content = "" if rel_content_value is None else str(rel_content_value)
+            if len(rel_content) > 160:
+                rel_content = rel_content[:160] + "..."
+            lines.append(
+                f"- `{related_id}` hop={related.get('hop')} "
+                f"type={related.get('edge_type')} weight={related.get('weight')}: {rel_content}"
+            )
+    return "\n".join(lines)
+
+
+def _apply_get_record_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+) -> tuple[list[dict], dict]:
+    """Apply direct-get content controls to primary and related records."""
+    remaining = budget_chars if content_mode == "full" and budget_chars is not None else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_ids = []
+
+    def _record_identifier(record: dict) -> str:
+        return str(record.get("id") or record.get("node_id") or "")
+
+    def _apply_to_record(record: dict) -> dict:
+        nonlocal remaining, budget_used
+        controlled = dict(record)
+        original_content = str(controlled.get("content") or "")
+        controlled["content_length"] = int(controlled.get("content_length") or len(original_content))
+        controlled["content_mode"] = content_mode
+        controlled["content_truncated"] = False
+        controlled["content_omitted_due_to_budget"] = False
+
+        record_id = _record_identifier(controlled)
+        if content_mode == "none":
+            controlled["content"] = None
+            return controlled
+
+        if content_mode == "preview":
+            if len(original_content) > preview_chars:
+                controlled["content"] = original_content[:preview_chars]
+                controlled["content_truncated"] = True
+                if record_id:
+                    truncated_ids.append(record_id)
+            else:
+                controlled["content"] = original_content
+            budget_used += len(controlled.get("content") or "")
+            return controlled
+
+        if remaining is None:
+            controlled["content"] = original_content
+            budget_used += len(original_content)
+        elif remaining <= 0:
+            controlled["content"] = ""
+            controlled["content_truncated"] = True
+            controlled["content_omitted_due_to_budget"] = True
+            if record_id:
+                omitted_ids.append(record_id)
+        elif len(original_content) > remaining:
+            controlled["content"] = original_content[:remaining]
+            controlled["content_truncated"] = True
+            controlled["budget_truncated"] = True
+            if record_id:
+                truncated_ids.append(record_id)
+            budget_used += remaining
+            remaining = 0
+        else:
+            controlled["content"] = original_content
+            budget_used += len(original_content)
+            remaining -= len(original_content)
+
+        return controlled
+
+    controlled_records = []
+    for raw in records:
+        record = _apply_to_record(raw)
+        if record.get("related"):
+            record["related"] = [_apply_to_record(related) for related in record["related"]]
+        controlled_records.append(record)
+
+    return controlled_records, {
+        "content_mode": content_mode,
+        "preview_chars": preview_chars if content_mode == "preview" else None,
+        "budget_chars": budget_chars if content_mode == "full" else None,
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_ids),
+    }
+
+
+def _format_content_control_footer(content_meta: dict) -> str:
+    """Render compact truncation/omission metadata for markdown outputs."""
+    lines = []
+    if content_meta.get("budget_chars") is not None:
+        lines.append(
+            "Content budget: "
+            f"{content_meta.get('content_budget_used', 0)}/{content_meta.get('budget_chars')} chars"
+        )
+    if content_meta.get("content_truncated_ids"):
+        lines.append(
+            "Content truncated: "
+            + ", ".join(f"`{rid}`" for rid in content_meta["content_truncated_ids"])
+        )
+    if content_meta.get("content_omitted_ids"):
+        lines.append(
+            "Content omitted due to budget: "
+            + ", ".join(f"`{rid}`" for rid in content_meta["content_omitted_ids"])
+        )
+    return "\n".join(lines)
+
+
+def _query_record_base(record: dict, include_metadata: bool) -> dict:
+    """Normalize bridge.query_structured records for MCP output."""
+    metadata = dict(record.get("metadata") or {})
+    event_type = record.get("event_type") or metadata.get("event_type") or metadata.get("type") or "memory"
+    normalized = {
+        "id": record.get("id", ""),
+        "content": record.get("content") or "",
+        "event_type": event_type,
+        "created_at": record.get("created_at"),
+        "updated_at": metadata.get("updated_at"),
+        "session_id": record.get("session_id") or metadata.get("session_id"),
+        "project": record.get("project") or metadata.get("project"),
+        "entity_id": record.get("entity_id") or metadata.get("entity_id"),
+        "agent_type": record.get("agent_type") or metadata.get("agent_type"),
+        "tags": record.get("tags") or metadata.get("tags", []),
+        "status": record.get("status") or metadata.get("status", "active"),
+        "source_uri": record.get("source_uri") or metadata.get("source_uri"),
+        "derived_from": record.get("derived_from") or metadata.get("derived_from"),
+        "strength": record.get("strength"),
+        "relevance": record.get("relevance"),
+        "_query_confidence": record.get("_query_confidence"),
+        "valid_from": record.get("valid_from"),
+        "valid_until": record.get("valid_until"),
+        "is_constraint": bool(record.get("is_constraint", False) or metadata.get("event_type") in ("constraint", "user_preference")),
+        "is_preference": bool(record.get("is_preference", False) or metadata.get("event_type") == "user_preference"),
+    }
+    if include_metadata:
+        normalized["metadata"] = metadata
+    return normalized
+
+
+def _apply_query_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    budget_chars: int | None,
+    include_metadata: bool,
+) -> tuple[list[dict], dict]:
+    """Apply content mode and global content budget to structured query records."""
+    remaining = budget_chars if content_mode == "full" else None
+    budget_used = 0
+    truncated_ids = []
+    omitted_content_ids = []
+    controlled = []
+
+    for raw_record in records:
+        record = _query_record_base(raw_record, include_metadata=include_metadata)
+        original_content = str(record.get("content") or "")
+        record["content_length"] = len(original_content)
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+        elif content_mode == "preview":
+            if len(original_content) > preview_chars:
+                record["content"] = original_content[:preview_chars]
+                record["content_truncated"] = True
+                truncated_ids.append(record["id"])
+            else:
+                record["content"] = original_content
+            budget_used += len(record.get("content") or "")
+        else:
+            if remaining is None:
+                record["content"] = original_content
+                budget_used += len(original_content)
+            elif remaining <= 0:
+                record["content"] = ""
+                record["content_truncated"] = True
+                record["content_omitted_due_to_budget"] = True
+                omitted_content_ids.append(record["id"])
+            elif len(original_content) > remaining:
+                record["content"] = original_content[:remaining]
+                record["content_truncated"] = True
+                record["budget_truncated"] = True
+                truncated_ids.append(record["id"])
+                budget_used += remaining
+                remaining = 0
+            else:
+                record["content"] = original_content
+                budget_used += len(original_content)
+                remaining -= len(original_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_content_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_content_ids),
+    }
+
+
+def _format_query_records_markdown(
+    *,
+    query_text: str,
+    records: list[dict],
+    metadata: dict,
+) -> str:
+    """Render structured query records as markdown."""
+    confidence = metadata.get("confidence")
+    confidence_label = ""
+    if confidence is not None and confidence < 0.3:
+        confidence_label = " (confidence: low -- results may not be relevant)"
+    elif confidence is not None and confidence <= 0.7:
+        confidence_label = " (confidence: medium)"
+
+    lines = [f"Results: {len(records)}{confidence_label}", f"Query: {query_text}"]
+    if metadata.get("content_truncated"):
+        lines.append(
+            "Content budget applied: "
+            f"{metadata.get('content_budget_used', 0)}/{metadata.get('budget_chars', 'unbounded')} chars"
+        )
+    if not records:
+        lines.extend(["", "*No matching memories found.*"])
+        return "\n".join(lines)
+
+    for i, record in enumerate(records, 1):
+        lines.extend(["", _format_memory_record_markdown(record, index=i)])
+
+    omitted = metadata.get("content_omitted_ids") or []
+    if omitted:
+        lines.extend(["", "Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in omitted)])
+    return "\n".join(lines)
+
+
+def _recall_record_sort_key(record: dict) -> tuple:
+    """Sort recall candidates by injection status, strength, relevance, and recency."""
+    return (
+        1 if record.get("is_constraint") or record.get("is_preference") else 0,
+        float(record.get("strength") or 0.0),
+        float(record.get("relevance") or 0.0),
+        str(record.get("created_at") or ""),
+    )
+
+
+def _dedupe_recall_records(records: list[dict], limit: int) -> tuple[list[dict], list[dict]]:
+    """Dedupe records by stable ID while merging retrieval source labels."""
+    by_id: dict[str, dict] = {}
+    for raw in records:
+        record_id = raw.get("id")
+        if not record_id:
+            continue
+        existing = by_id.get(record_id)
+        if existing is None:
+            raw["retrieval_sources"] = sorted(set(raw.get("retrieval_sources", [])))
+            by_id[record_id] = raw
+            continue
+        existing["retrieval_sources"] = sorted(
+            set(existing.get("retrieval_sources", [])) | set(raw.get("retrieval_sources", []))
+        )
+        for key in ("strength", "relevance", "_query_confidence"):
+            if raw.get(key) is not None and (existing.get(key) is None or raw[key] > existing[key]):
+                existing[key] = raw[key]
+        if raw.get("is_constraint"):
+            existing["is_constraint"] = True
+        if raw.get("is_preference"):
+            existing["is_preference"] = True
+
+    deduped = sorted(by_id.values(), key=_recall_record_sort_key, reverse=True)
+    constraints = [r for r in deduped if r.get("is_constraint") or r.get("is_preference")]
+    semantics = [r for r in deduped if not (r.get("is_constraint") or r.get("is_preference"))]
+    return semantics[:limit], constraints
+
+
+def _record_from_memory_result(node: Any, *, include_metadata: bool, retrieval_source: str) -> dict:
+    """Convert MemoryResult to a recall-compatible record with full content."""
+    record = _memory_result_to_dict(
+        node,
+        include_metadata=include_metadata,
+        content_mode="full",
+        preview_chars=0,
+    )
+    record["retrieval_sources"] = [retrieval_source]
+    return record
+
+
+# NOTE(F4-pre-promotion): _pack_recall_records operates on a different content
+# model than the other three content-control functions
+# (_apply_query_content_controls, _apply_get_record_content_controls,
+# _apply_context_record_content_controls). Those functions support both preview
+# and full content modes and track budget_used in both. This function supports
+# full-content hydration only, driven by budget_chars, with no preview path.
+# This is architecturally intentional for the query-then-hydrate recall model.
+# If these four functions are ever unified into a shared ContentBudget class,
+# this difference must be preserved. See docs/development/bugfix-pre-promotion.md TD-002.
+def _pack_recall_records(
+    records: list[dict],
+    *,
+    budget_chars: int,
+    include_metadata: bool,
+    expand_related: bool,
+    max_related: int,
+    edge_types: list[str] | None,
+) -> tuple[list[dict], dict]:
+    """Pack primary and related records into a single character budget."""
+    from omega.bridge import _get_store
+
+    db = _get_store()
+    remaining = budget_chars
+    budget_used = 0
+    truncated_ids = []
+    omitted_ids = []
+    packed = []
+
+    for raw in records:
+        record = dict(raw)
+        original_content = str(record.get("content") or "")
+        record["content_length"] = len(original_content)
+        # Recall intentionally diverges from search/context handlers by forcing
+        # content_mode to 'full' (with no 'preview' path). This is because recall's
+        # primary purpose is to surface exact, prompt-ready text to the agent for hydration,
+        # whereas browse/search prioritize high-density discovery.
+        record["content_mode"] = "full"
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+        if remaining <= 0:
+            record["content"] = ""
+            record["content_truncated"] = True
+            record["content_omitted_due_to_budget"] = True
+            omitted_ids.append(record["id"])
+        elif len(original_content) > remaining:
+            record["content"] = original_content[:remaining]
+            record["content_truncated"] = True
+            record["budget_truncated"] = True
+            truncated_ids.append(record["id"])
+            budget_used += remaining
+            remaining = 0
+        else:
+            record["content"] = original_content
+            budget_used += len(original_content)
+            remaining -= len(original_content)
+
+        related_records = []
+        if expand_related and max_related > 0 and remaining > 0 and hasattr(db, "get_related_chain"):
+            try:
+                related_chain = db.get_related_chain(
+                    record["id"],
+                    max_hops=1,
+                    edge_types=edge_types,
+                    exclude_ids={r.get("id") for r in records},
+                )
+            except Exception as e:
+                logger.debug("recall related expansion failed for %s: %s", record.get("id"), e)
+                related_chain = []
+            for related in related_chain[:max_related]:
+                related_id = related.get("node_id")
+                related_content = str(related.get("content") or "")
+                related_record = {
+                    "id": related_id,
+                    "content": related_content,
+                    "content_length": len(related_content),
+                    "content_mode": "full",
+                    "content_truncated": False,
+                    "content_omitted_due_to_budget": False,
+                    "event_type": (related.get("metadata") or {}).get("event_type", "memory"),
+                    "created_at": related.get("created_at"),
+                    "metadata": related.get("metadata", {}) if include_metadata else None,
+                    "hop": related.get("hop"),
+                    "edge_type": related.get("edge_type"),
+                    "weight": related.get("weight"),
+                }
+                if not include_metadata:
+                    related_record.pop("metadata", None)
+                if remaining <= 0:
+                    related_record["content"] = ""
+                    related_record["content_truncated"] = True
+                    related_record["content_omitted_due_to_budget"] = True
+                    if related_id:
+                        omitted_ids.append(related_id)
+                elif len(related_content) > remaining:
+                    related_record["content"] = related_content[:remaining]
+                    related_record["content_truncated"] = True
+                    related_record["budget_truncated"] = True
+                    if related_id:
+                        truncated_ids.append(related_id)
+                    budget_used += remaining
+                    remaining = 0
+                else:
+                    budget_used += len(related_content)
+                    remaining -= len(related_content)
+                related_records.append(related_record)
+        if related_records:
+            record["related"] = related_records
+        packed.append(record)
+
+    return packed, {
+        "budget_chars": budget_chars,
+        "content_budget_used": budget_used,
+        "content_truncated": bool(truncated_ids or omitted_ids),
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_ids if rid],
+    }
+
+
+def _format_recall_context(
+    *,
+    query_text: str,
+    profile_name: str,
+    profile_description: str,
+    records: list[dict],
+    constraints: list[dict],
+    budget_meta: dict,
+    searches_run: list[dict],
+) -> str:
+    """Build a prompt-ready markdown context block for recall."""
+    lines = [
+        f"# OMEGA Recall: {query_text}",
+        f"Profile: {profile_name} -- {profile_description}",
+        f"Results: {len(records)} | Budget: {budget_meta['content_budget_used']}/{budget_meta['budget_chars']} chars",
+        "",
+    ]
+    if not records and not constraints:
+        lines.append("*No matching memories found.*")
+        return "\n".join(lines)
+
+    if records:
+        for i, record in enumerate(records, 1):
+            sources = ", ".join(record.get("retrieval_sources") or [])
+            header = f"## {i}. [{record.get('event_type', 'memory')}] `{record.get('id')}`"
+            if sources:
+                header += f" ({sources})"
+            lines.append(header)
+            lines.append(
+                f"Strength: {record.get('strength')} | Relevance: {record.get('relevance')} | "
+                f"Created: {record.get('created_at') or ''}"
+            )
+            project = record.get("project")
+            session_id = record.get("session_id")
+            if project or session_id:
+                lines.append(f"Project: {project or ''} | Session: {session_id or ''}")
+            lines.append("")
+            lines.append(str(record.get("content") or ""))
+            if record.get("content_truncated"):
+                lines.append("")
+                lines.append(f"*Content truncated from {record.get('content_length', 0)} characters.*")
+            if record.get("related"):
+                lines.append("")
+                lines.append("Related:")
+                for related in record["related"]:
+                    lines.append(
+                        f"- [{related.get('event_type', 'memory')}] `{related.get('id')}` "
+                        f"hop={related.get('hop')} edge={related.get('edge_type')} weight={related.get('weight')}"
+                    )
+                    if related.get("content"):
+                        lines.append(f"  {related['content']}")
+                    if related.get("content_truncated"):
+                        lines.append("  *Related content truncated.*")
+            lines.append("")
+
+    if constraints:
+        lines.append("## Active Constraints")
+        lines.append("")
+        for j, record in enumerate(constraints, 1):
+            sources = ", ".join(record.get("retrieval_sources") or [])
+            header = f"### {j}. [{record.get('event_type', 'memory')}] `{record.get('id')}`"
+            if sources:
+                header += f" ({sources})"
+            lines.append(header)
+            lines.append(
+                f"Strength: {record.get('strength')} | Relevance: {record.get('relevance')} | "
+                f"Created: {record.get('created_at') or ''}"
+            )
+            project = record.get("project")
+            session_id = record.get("session_id")
+            if project or session_id:
+                lines.append(f"Project: {project or ''} | Session: {session_id or ''}")
+            lines.append("")
+            lines.append(str(record.get("content") or ""))
+            if record.get("content_truncated"):
+                lines.append("")
+                lines.append(f"*Content truncated from {record.get('content_length', 0)} characters.*")
+            if record.get("related"):
+                lines.append("")
+                lines.append("Related:")
+                for related in record["related"]:
+                    lines.append(
+                        f"- [{related.get('event_type', 'memory')}] `{related.get('id')}` "
+                        f"hop={related.get('hop')} edge={related.get('edge_type')} weight={related.get('weight')}"
+                    )
+                    if related.get("content"):
+                        lines.append(f"  {related['content']}")
+                    if related.get("content_truncated"):
+                        lines.append("  *Related content truncated.*")
+            lines.append("")
+
+    if budget_meta.get("content_omitted_ids"):
+        lines.append("Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in budget_meta["content_omitted_ids"]))
+    if searches_run:
+        lines.append("")
+        lines.append("Searches run:")
+        for search in searches_run:
+            lines.append(
+                f"- {search.get('source')} event_type={search.get('event_type') or 'any'} "
+                f"results={search.get('result_count', 0)}"
+            )
+    return "\n".join(lines).rstrip()
+
+
+_CONTEXT_MODE_EVENT_TYPES = {
+    "handoff": (
+        "checkpoint",
+        "task_completion",
+        "project_status",
+        "constraint",
+        "lesson_learned",
+        "decision",
+    ),
+    "planning": (
+        "decision",
+        "constraint",
+        "user_preference",
+        "task_completion",
+        "checkpoint",
+        "lesson_learned",
+    ),
+    "debug": (
+        "error_pattern",
+        "lesson_learned",
+        "constraint",
+        "decision",
+        "checkpoint",
+        "task_completion",
+    ),
+}
+
+_CONTEXT_MODE_DESCRIPTIONS = {
+    "handoff": "latest checkpoints, completions, project status, constraints, lessons, and decisions",
+    "planning": "decisions, constraints, preferences, completions, checkpoints, and lessons",
+    "debug": "error patterns, lessons, constraints, decisions, checkpoints, and recent completions",
+}
+
+
+def _context_section_title(event_type: str) -> str:
+    """Human-readable section title for context-pack event types."""
+    return {
+        "checkpoint": "Checkpoints",
+        "task_completion": "Task Completions",
+        "project_status": "Project Status",
+        "constraint": "Constraints",
+        "lesson_learned": "Lessons Learned",
+        "decision": "Decisions",
+        "user_preference": "User Preferences",
+        "error_pattern": "Error Patterns",
+    }.get(event_type, event_type.replace("_", " ").title())
+
+
+def _dedupe_context_records(records: list[dict]) -> list[dict]:
+    """Dedupe context pack records while preserving first occurrence order."""
+    seen = set()
+    deduped = []
+    for record in records:
+        record_id = record.get("id")
+        if not record_id or record_id in seen:
+            continue
+        seen.add(record_id)
+        deduped.append(record)
+    return deduped
+
+
+def _apply_context_record_content_controls(
+    records: list[dict],
+    *,
+    content_mode: str,
+    preview_chars: int,
+    remaining_chars: int,
+) -> tuple[list[dict], dict, int]:
+    """Apply context-pack content mode with a shared remaining budget."""
+    remaining = max(0, remaining_chars)
+    budget_used = 0
+    truncated_ids = []
+    omitted_ids = []
+    controlled = []
+
+    for raw in records:
+        record = dict(raw)
+        original_content = str(record.get("content") or "")
+        record["content_length"] = len(original_content)
+        record["content_mode"] = content_mode
+        record["content_truncated"] = False
+        record["content_omitted_due_to_budget"] = False
+
+        if content_mode == "none":
+            record["content"] = None
+            controlled.append(record)
+            continue
+
+        target_content = original_content
+        if content_mode == "preview" and len(original_content) > preview_chars:
+            target_content = original_content[:preview_chars]
+            record["content_truncated"] = True
+            truncated_ids.append(record["id"])
+
+        if remaining <= 0:
+            record["content"] = ""
+            record["content_truncated"] = True
+            record["content_omitted_due_to_budget"] = True
+            omitted_ids.append(record["id"])
+        elif len(target_content) > remaining:
+            record["content"] = target_content[:remaining]
+            record["content_truncated"] = True
+            record["budget_truncated"] = True
+            truncated_ids.append(record["id"])
+            budget_used += remaining
+            remaining = 0
+        else:
+            record["content"] = target_content
+            budget_used += len(target_content)
+            remaining -= len(target_content)
+
+        controlled.append(record)
+
+    return controlled, {
+        "content_budget_used": budget_used,
+        "content_truncated_ids": [rid for rid in truncated_ids if rid],
+        "content_omitted_ids": [rid for rid in omitted_ids if rid],
+        "content_truncated": bool(truncated_ids or omitted_ids),
+    }, remaining
+
+
+def _format_context_pack_markdown(payload: dict) -> str:
+    """Render an omega_context payload as compact markdown."""
+    lines = [
+        f"# OMEGA Context: {payload['project']}",
+        f"Mode: {payload['mode']} -- {payload['description']}",
+        f"Items: {payload['item_count']} | Budget: {payload['content']['content_budget_used']}/{payload['content']['budget_chars']} chars",
+        "",
+    ]
+    if payload.get("query"):
+        lines.append(f"Focused query: {payload['query']}")
+        lines.append("")
+
+    if not payload["sections"]:
+        lines.append("*No project-scoped memories found.*")
+        return "\n".join(lines)
+
+    for section in payload["sections"]:
+        lines.append(f"## {section['title']} ({len(section['items'])})")
+        if not section["items"]:
+            lines.append("*No matching memories.*")
+            lines.append("")
+            continue
+        for item in section["items"]:
+            created = item.get("created_at") or ""
+            status = item.get("status") or "active"
+            status_part = f" status={status}" if status != "active" else ""
+            lines.append(f"- `{item.get('id')}` [{item.get('event_type')}] {created}{status_part}")
+            if item.get("content"):
+                content = str(item["content"]).replace("\n", "\n  ")
+                lines.append(f"  {content}")
+            if item.get("content_truncated"):
+                lines.append(f"  *Content truncated from {item.get('content_length', 0)} characters.*")
+        lines.append("")
+
+    content = payload["content"]
+    if content.get("content_omitted_ids"):
+        lines.append("Content omitted due to budget: " + ", ".join(f"`{rid}`" for rid in content["content_omitted_ids"]))
+    if content.get("content_truncated_ids"):
+        lines.append("Content truncated: " + ", ".join(f"`{rid}`" for rid in content["content_truncated_ids"]))
+    return "\n".join(lines).rstrip()
 
 
 # ---------------------------------------------------------------------------
@@ -680,6 +1550,28 @@ async def handle_omega_query(arguments: dict) -> dict:
     include_contradicted = arguments.get("include_contradicted", False)
     valid_at = arguments.get("valid_at")
     status_filter = arguments.get("status")
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+    preview_chars = _clamp_int(arguments.get("preview_chars", 200), default=200, min_val=1, max_val=20000)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 30000), default=30000, min_val=0, max_val=200000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    include_constraints = arguments.get("include_constraints", True)
+    include_preferences = arguments.get("include_preferences", True)
+    uses_structured_output = (
+        output_format == "json"
+        or content_mode != "preview"
+        or "preview_chars" in arguments
+        or "budget_chars" in arguments
+        or "include_metadata" in arguments
+        or "include_constraints" in arguments
+        or "include_preferences" in arguments
+    )
 
     # Map context param to SurfacingContext enum
     surfacing_context = None
@@ -732,29 +1624,124 @@ async def handle_omega_query(arguments: dict) -> dict:
             except Exception:
                 pass
         else:
-            from omega.bridge import query
+            if uses_structured_output:
+                from omega.bridge import query_structured
 
-            result = query(
-                query_text=query_text,
-                limit=limit,
-                event_type=event_type,
-                project=project,
-                session_id=session_id,
-                context_file=context_file,
-                context_tags=context_tags,
-                filter_tags=filter_tags,
-                temporal_range=temporal_range,
-                entity_id=entity_id,
-                agent_type=agent_type,
-                scope=scope,
-                surfacing_context=surfacing_context,
-                perspective=perspective,
-                strength_min=strength_min,
-                memory_type=memory_type,
-                include_contradicted=include_contradicted,
-                valid_at=valid_at,
-                status=status_filter,
-            )
+                raw_records = query_structured(
+                    query_text=query_text,
+                    limit=limit,
+                    event_type=event_type,
+                    project=project,
+                    session_id=session_id,
+                    context_file=context_file,
+                    context_tags=context_tags,
+                    filter_tags=filter_tags,
+                    temporal_range=temporal_range,
+                    entity_id=entity_id,
+                    agent_type=agent_type,
+                    scope=scope,
+                    surfacing_context=surfacing_context,
+                    perspective=perspective,
+                    strength_min=strength_min,
+                    memory_type=memory_type,
+                    include_contradicted=include_contradicted,
+                    valid_at=valid_at,
+                    status=status_filter,
+                    include_constraints=bool(include_constraints),
+                    include_preferences=bool(include_preferences),
+                )
+                controlled_records, content_meta = _apply_query_content_controls(
+                    raw_records,
+                    content_mode=content_mode,
+                    preview_chars=preview_chars,
+                    budget_chars=budget_chars,
+                    include_metadata=bool(include_metadata),
+                )
+                if not include_constraints:
+                    for r in controlled_records:
+                        r["is_constraint"] = False
+                if not include_preferences:
+                    for r in controlled_records:
+                        r["is_preference"] = False
+                confidence_values = [
+                    record.get("_query_confidence")
+                    for record in controlled_records
+                    if record.get("_query_confidence") is not None
+                ]
+                confidence = confidence_values[0] if confidence_values else None
+                query_metadata = {
+                    "mode": "semantic",
+                    "format": output_format,
+                    "query": query_text,
+                    "limit": limit,
+                    "filters": {
+                        "event_type": event_type,
+                        "project": project,
+                        "session_id": session_id,
+                        "context_file": context_file,
+                        "context_tags": context_tags,
+                        "filter_tags": filter_tags,
+                        "temporal_range": temporal_range,
+                        "entity_id": entity_id,
+                        "agent_type": agent_type,
+                        "scope": scope,
+                        "context": context_param,
+                        "perspective": perspective,
+                        "strength_min": strength_min,
+                        "memory_type": memory_type,
+                        "include_contradicted": include_contradicted,
+                        "valid_at": valid_at,
+                        "status": status_filter,
+                    },
+                    "result_count": len(controlled_records),
+                    "content_mode": content_mode,
+                    "preview_chars": preview_chars,
+                    "budget_chars": budget_chars if content_mode == "full" else None,
+                    "include_metadata": bool(include_metadata),
+                    "include_constraints": bool(include_constraints),
+                    "include_preferences": bool(include_preferences),
+                    "confidence": confidence,
+                    **content_meta,
+                }
+                result_payload = {
+                    "mode": "semantic",
+                    "query": query_text,
+                    "result_count": len(controlled_records),
+                    "results": controlled_records,
+                    "metadata": query_metadata,
+                }
+                if output_format == "json":
+                    result = json.dumps(result_payload, indent=2)
+                else:
+                    result = _format_query_records_markdown(
+                        query_text=query_text,
+                        records=controlled_records,
+                        metadata=query_metadata,
+                    )
+            else:
+                from omega.bridge import query
+
+                result = query(
+                    query_text=query_text,
+                    limit=limit,
+                    event_type=event_type,
+                    project=project,
+                    session_id=session_id,
+                    context_file=context_file,
+                    context_tags=context_tags,
+                    filter_tags=filter_tags,
+                    temporal_range=temporal_range,
+                    entity_id=entity_id,
+                    agent_type=agent_type,
+                    scope=scope,
+                    surfacing_context=surfacing_context,
+                    perspective=perspective,
+                    strength_min=strength_min,
+                    memory_type=memory_type,
+                    include_contradicted=include_contradicted,
+                    valid_at=valid_at,
+                    status=status_filter,
+                )
 
         # Mark deploy gate as cleared when querying decisions
         if event_type == "decision":
@@ -774,6 +1761,407 @@ async def handle_omega_query(arguments: dict) -> dict:
     except Exception as e:
         logger.error("omega_query failed: %s", e, exc_info=True)
         return mcp_error("Query failed")
+
+
+# ============================================================================
+# Handler: omega_recall
+# ============================================================================
+
+
+async def handle_omega_recall(arguments: dict) -> dict:
+    """Search, hydrate, and pack memories into a prompt-ready context block."""
+    query_text = arguments.get("query", "").strip()
+    if not query_text:
+        return mcp_error("query is required")
+
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+
+    limit = _clamp_int(arguments.get("limit", 5), default=5, min_val=1, max_val=50)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 12000), default=12000, min_val=0, max_val=200000)
+    profile_name = arguments.get("profile", "general")
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    event_type = arguments.get("event_type")
+    project = arguments.get("project")
+    session_id = _validate_session_id(arguments.get("session_id"))
+    context_file = arguments.get("context_file")
+    context_tags = arguments.get("context_tags")
+    filter_tags = arguments.get("filter_tags")
+    raw_temporal = arguments.get("temporal_range")
+    temporal_range = tuple(raw_temporal) if raw_temporal and len(raw_temporal) == 2 else None
+    entity_id = _validate_entity_id(arguments.get("entity_id"))
+    agent_type = arguments.get("agent_type")
+    memory_type = arguments.get("memory_type")
+    if memory_type and memory_type not in ("episodic", "semantic", "procedural"):
+        memory_type = None
+    include_contradicted = arguments.get("include_contradicted", False)
+    valid_at = arguments.get("valid_at")
+    status_filter = arguments.get("status")
+    expand_related = arguments.get("expand_related", False)
+    max_related = _clamp_int(arguments.get("max_related", 3), default=3, min_val=0, max_val=20)
+    edge_types = arguments.get("edge_types")
+    if edge_types is not None and not isinstance(edge_types, list):
+        return mcp_error("edge_types must be a list")
+
+    try:
+        from omega.bridge import _get_store, query_structured
+        from omega.server.retrieval_profiles import get_retrieval_profile
+
+        profile = get_retrieval_profile(profile_name)
+        if profile.name != profile_name:
+            profile_name = profile.name
+
+        surfacing_context = None
+        try:
+            from omega.sqlite_store import SurfacingContext
+            context_map = {
+                "general": SurfacingContext.GENERAL,
+                "error_debug": SurfacingContext.ERROR_DEBUG,
+                "file_edit": SurfacingContext.FILE_EDIT,
+                "planning": SurfacingContext.PLANNING,
+                "review": SurfacingContext.REVIEW,
+            }
+            surfacing_context = context_map.get(profile.context)
+        except ImportError:
+            pass
+
+        searches_run: list[dict] = []
+        candidates: list[dict] = []
+
+        def _run_structured(source: str, profile_event_type: str | None = None, search_limit: int | None = None) -> None:
+            records = query_structured(
+                query_text=query_text,
+                limit=search_limit or max(limit, 5),
+                event_type=profile_event_type,
+                project=project,
+                session_id=session_id,
+                context_file=context_file,
+                context_tags=context_tags,
+                filter_tags=filter_tags,
+                temporal_range=temporal_range,
+                entity_id=entity_id,
+                agent_type=agent_type,
+                scope="project",
+                surfacing_context=surfacing_context,
+                perspective=profile.perspective,
+                memory_type=memory_type,
+                include_contradicted=include_contradicted,
+                valid_at=valid_at,
+                status=status_filter,
+                include_constraints=True,
+                include_preferences=True,
+            )
+            searches_run.append({
+                "source": source,
+                "event_type": profile_event_type,
+                "result_count": len(records),
+            })
+            for record in records:
+                normalized = _query_record_base(record, include_metadata=bool(include_metadata))
+                normalized["retrieval_sources"] = [source]
+                candidates.append(normalized)
+
+        if event_type:
+            _run_structured("semantic", profile_event_type=event_type, search_limit=limit * 2)
+        else:
+            _run_structured("semantic", profile_event_type=None, search_limit=limit * 2)
+            for profile_event_type in profile.event_types:
+                _run_structured(
+                    f"profile:{profile.name}",
+                    profile_event_type=profile_event_type,
+                    search_limit=max(2, limit),
+                )
+
+        if profile.phrase_fallback:
+            try:
+                db = _get_store()
+                phrase_results = db.phrase_search(
+                    phrase=query_text,
+                    limit=limit,
+                    event_type=event_type,
+                    case_sensitive=False,
+                    project_path=project or "",
+                )
+                searches_run.append({
+                    "source": "phrase_fallback",
+                    "event_type": event_type,
+                    "result_count": len(phrase_results),
+                })
+                for node in phrase_results:
+                    candidates.append(
+                        _record_from_memory_result(
+                            node,
+                            include_metadata=bool(include_metadata),
+                            retrieval_source="phrase_fallback",
+                        )
+                    )
+            except Exception as e:
+                logger.debug("recall phrase fallback failed: %s", e)
+                searches_run.append({
+                    "source": "phrase_fallback",
+                    "event_type": event_type,
+                    "result_count": 0,
+                    "error": str(e),
+                })
+
+        selected_semantics, selected_constraints = _dedupe_recall_records(candidates, limit=limit)
+        
+        packed_constraints, constraint_budget_meta = _pack_recall_records(
+            selected_constraints,
+            budget_chars=budget_chars,
+            include_metadata=bool(include_metadata),
+            expand_related=bool(expand_related),
+            max_related=max_related,
+            edge_types=edge_types,
+        )
+        remaining_budget = max(0, budget_chars - constraint_budget_meta["content_budget_used"])
+
+        packed_records, budget_meta = _pack_recall_records(
+            selected_semantics,
+            budget_chars=remaining_budget,
+            include_metadata=bool(include_metadata),
+            expand_related=bool(expand_related),
+            max_related=max_related,
+            edge_types=edge_types,
+        )
+        
+        combined_budget_meta = {
+            "budget_chars": budget_chars,
+            "content_budget_used": constraint_budget_meta["content_budget_used"] + budget_meta["content_budget_used"],
+            "content_truncated": constraint_budget_meta["content_truncated"] or budget_meta["content_truncated"],
+            "content_truncated_ids": constraint_budget_meta["content_truncated_ids"] + budget_meta["content_truncated_ids"],
+            "content_omitted_ids": constraint_budget_meta["content_omitted_ids"] + budget_meta["content_omitted_ids"],
+        }
+
+        context = _format_recall_context(
+            query_text=query_text,
+            profile_name=profile.name,
+            profile_description=profile.description,
+            records=packed_records,
+            constraints=packed_constraints,
+            budget_meta=combined_budget_meta,
+            searches_run=searches_run,
+        )
+        payload = {
+            "mode": "recall",
+            "query": query_text,
+            "profile": {
+                "name": profile.name,
+                "description": profile.description,
+                "event_types": list(profile.event_types),
+                "context": profile.context,
+                "perspective": profile.perspective,
+                "phrase_fallback": profile.phrase_fallback,
+            },
+            "filters": {
+                "event_type": event_type,
+                "project": project,
+                "session_id": session_id,
+                "context_file": context_file,
+                "context_tags": context_tags,
+                "filter_tags": filter_tags,
+                "temporal_range": temporal_range,
+                "entity_id": entity_id,
+                "agent_type": agent_type,
+                "memory_type": memory_type,
+                "include_contradicted": include_contradicted,
+                "valid_at": valid_at,
+                "status": status_filter,
+            },
+            "result_count": len(packed_records),
+            "results": packed_records,
+            "constraints": packed_constraints,
+            "context": context,
+            "searches_run": searches_run,
+            "omitted": {
+                "content_ids": combined_budget_meta["content_omitted_ids"],
+            },
+            "truncated": {
+                "content": combined_budget_meta["content_truncated"],
+                "content_ids": combined_budget_meta["content_truncated_ids"],
+            },
+            "budget": combined_budget_meta,
+        }
+
+        if output_format == "json":
+            return mcp_response(json.dumps(payload, indent=2))
+        return mcp_response(context)
+    except Exception as e:
+        logger.error("omega_recall failed: %s", e, exc_info=True)
+        return mcp_error(f"Recall failed: {e}")
+
+
+# ============================================================================
+# Handler: omega_context
+# ============================================================================
+
+
+async def handle_omega_context(arguments: dict) -> dict:
+    """Build a compact project-scoped memory context pack."""
+    project = arguments.get("project") or os.getcwd()
+    mode = arguments.get("mode", "handoff")
+    if mode not in _CONTEXT_MODE_EVENT_TYPES:
+        return mcp_error("mode must be one of: handoff, planning, debug")
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+
+    limit_per_type = _clamp_int(arguments.get("limit_per_type", 3), default=3, min_val=1, max_val=20)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 12000), default=12000, min_val=0, max_val=200000)
+    preview_chars = _clamp_int(arguments.get("preview_chars", 700), default=700, min_val=0, max_val=10000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    status_filter = arguments.get("status", "active")
+    query_text = (arguments.get("query") or "").strip()
+
+    try:
+        from omega.bridge import _get_store, query_structured
+
+        db = _get_store()
+        event_types = _CONTEXT_MODE_EVENT_TYPES[mode]
+        sections_raw: list[dict] = []
+        all_nodes: list[Any] = []
+        seen_ids: set[str] = set()
+
+        for event_type in event_types:
+            nodes = db.get_by_project(
+                project,
+                event_type=event_type,
+                limit=limit_per_type,
+                status=status_filter,
+            )
+            deduped_nodes = []
+            for node in nodes:
+                if node.id in seen_ids:
+                    continue
+                seen_ids.add(node.id)
+                deduped_nodes.append(node)
+                all_nodes.append(node)
+            sections_raw.append({
+                "kind": "event_type",
+                "event_type": event_type,
+                "title": _context_section_title(event_type),
+                "nodes": deduped_nodes,
+            })
+
+        focused_records: list[dict] = []
+        if query_text:
+            focus_event_types = ("constraint", "decision", "lesson_learned", "error_pattern", "checkpoint")
+            focused_candidates: list[dict] = []
+            focus_seen_ids: set[str] = set()
+            for event_type in focus_event_types:
+                focused_candidates.extend(
+                    query_structured(
+                        query_text=query_text,
+                        event_type=event_type,
+                        project=project,
+                        limit=limit_per_type,
+                        scope="project",
+                        include_constraints=False,
+                        include_preferences=False,
+                        status=status_filter,
+                    )
+                )
+            for raw in focused_candidates:
+                record = _query_record_base(raw, include_metadata=bool(include_metadata))
+                record_project = record.get("project")
+                if record_project not in (project, None, ""):
+                    continue
+                record_id = record.get("id")
+                if not record_id or record_id in focus_seen_ids:
+                    continue
+                focus_seen_ids.add(record_id)
+                record["already_in_context"] = record_id in seen_ids
+                focused_records.append(record)
+            focused_records = _dedupe_context_records(focused_records)[:limit_per_type]
+
+        raw_records = [
+            _memory_result_to_dict(
+                node,
+                include_metadata=bool(include_metadata),
+                content_mode="full",
+                preview_chars=preview_chars,
+            )
+            for node in all_nodes
+        ]
+        records, content_meta, remaining_budget = _apply_context_record_content_controls(
+            raw_records,
+            content_mode=content_mode,
+            preview_chars=preview_chars,
+            remaining_chars=budget_chars,
+        )
+        record_by_id = {record["id"]: record for record in records}
+        if focused_records:
+            focused_records, focus_content_meta, _remaining_budget = _apply_context_record_content_controls(
+                focused_records,
+                content_mode=content_mode,
+                preview_chars=preview_chars,
+                remaining_chars=remaining_budget,
+            )
+        else:
+            focus_content_meta = {
+                "content_budget_used": 0,
+                "content_truncated_ids": [],
+                "content_omitted_ids": [],
+                "content_truncated": False,
+            }
+
+        sections = []
+        for raw_section in sections_raw:
+            items = [record_by_id[node.id] for node in raw_section["nodes"] if node.id in record_by_id]
+            sections.append({
+                "kind": raw_section["kind"],
+                "event_type": raw_section["event_type"],
+                "title": raw_section["title"],
+                "items": items,
+            })
+        if focused_records:
+            sections.insert(0, {
+                "kind": "focused_query",
+                "event_type": None,
+                "title": f"Focused Query: {query_text}",
+                "items": focused_records,
+            })
+
+        combined_content_meta = {
+            "content_mode": content_mode,
+            "preview_chars": preview_chars if content_mode == "preview" else None,
+            "budget_chars": budget_chars if content_mode == "full" else budget_chars,
+            "content_budget_used": content_meta["content_budget_used"] + focus_content_meta["content_budget_used"],
+            "content_truncated_ids": content_meta["content_truncated_ids"] + focus_content_meta["content_truncated_ids"],
+            "content_omitted_ids": content_meta["content_omitted_ids"] + focus_content_meta["content_omitted_ids"],
+            "content_truncated": bool(content_meta["content_truncated"] or focus_content_meta["content_truncated"]),
+        }
+        item_count = sum(len(section["items"]) for section in sections)
+        payload = {
+            "mode": mode,
+            "project": project,
+            "description": _CONTEXT_MODE_DESCRIPTIONS[mode],
+            "query": query_text or None,
+            "sections": sections,
+            "item_count": item_count,
+            "limit_per_type": limit_per_type,
+            "event_types": list(event_types),
+            "filters": {
+                "project": project,
+                "status": status_filter,
+            },
+            "content": combined_content_meta,
+        }
+
+        if output_format == "json":
+            return mcp_response(json.dumps(payload, indent=2))
+        return mcp_response(_format_context_pack_markdown(payload))
+    except Exception as e:
+        logger.error("omega_context failed: %s", e, exc_info=True)
+        return mcp_error(f"Context pack failed: {e}")
 
 
 # ============================================================================
@@ -829,33 +2217,104 @@ async def handle_omega_browse(arguments: dict) -> dict:
     """Browse memories by type, session, or most recent."""
     browse_by = arguments.get("browse_by", "recent")
     limit = _clamp_int(arguments.get("limit", 20), default=20, max_val=200)
+    offset = _clamp_int(arguments.get("offset", 0), default=0, min_val=0, max_val=100000)
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+    content_mode = arguments.get("content_mode", "preview")
+    if content_mode not in ("preview", "full", "none"):
+        return mcp_error("content_mode must be one of: preview, full, none")
+    preview_chars = _clamp_int(arguments.get("preview_chars", 200), default=200, min_val=0, max_val=10000)
+    budget_chars = _clamp_int(arguments.get("budget_chars", 30000), default=30000, min_val=0, max_val=200000)
+    include_metadata = arguments.get("include_metadata")
+    if include_metadata is None:
+        include_metadata = output_format == "json"
+    structured_requested = any(
+        key in arguments
+        for key in ("offset", "format", "content_mode", "preview_chars", "budget_chars", "include_metadata")
+    )
 
     try:
         from omega.bridge import _get_store
 
         db = _get_store()
+        fetch_limit = min(limit + 1, 201)
 
         if browse_by == "type":
             event_type = arguments.get("event_type")
             if not event_type:
                 return mcp_error("event_type is required when browse_by='type'")
-            results = db.get_by_type(event_type, limit=limit)
+            results = db.get_by_type(event_type, limit=fetch_limit, offset=offset)
             title = f"Memories of type '{event_type}'"
         elif browse_by == "session":
             session_id = _validate_session_id(arguments.get("session_id"))
             if not session_id:
                 return mcp_error("session_id is required when browse_by='session'")
-            results = db.get_by_session(session_id, limit=limit)
+            results = db.get_by_session(session_id, limit=fetch_limit, offset=offset)
             title = f"Memories from session '{session_id[:16]}...'"
         else:  # recent
-            results = db.get_recent(limit=limit)
+            results = db.get_recent(limit=fetch_limit, offset=offset)
             title = "Most recent memories"
 
-        if not results:
+        page_nodes = results[:limit]
+        has_more = len(results) > limit
+        next_offset = offset + limit if has_more else None
+
+        if structured_requested:
+            records, content_meta = _apply_memory_result_content_controls(
+                page_nodes,
+                content_mode=content_mode,
+                preview_chars=preview_chars,
+                budget_chars=budget_chars if content_mode == "full" else None,
+                include_metadata=bool(include_metadata),
+            )
+            payload = {
+                "mode": "browse",
+                "browse_by": browse_by,
+                "title": title,
+                "items": records,
+                "count": len(records),
+                "limit": limit,
+                "offset": offset,
+                "next_offset": next_offset,
+                "has_more": has_more,
+                "content": {
+                    "content_mode": content_mode,
+                    "preview_chars": preview_chars if content_mode == "preview" else None,
+                    "budget_chars": budget_chars if content_mode == "full" else None,
+                    **content_meta,
+                },
+                "filters": {
+                    "event_type": arguments.get("event_type") if browse_by == "type" else None,
+                    "session_id": arguments.get("session_id") if browse_by == "session" else None,
+                },
+            }
+            if output_format == "json":
+                return mcp_response(json.dumps(payload, indent=2))
+
+            if not records:
+                return mcp_response(f"# {title}\n\n*No memories found.*")
+
+            lines = [
+                f"# {title} ({len(records)} results)",
+                f"Offset: {offset} | Limit: {limit} | Has more: {str(has_more).lower()}",
+                "",
+            ]
+            for i, record in enumerate(records, offset + 1):
+                lines.append(_format_memory_record_markdown(record, i))
+                lines.append("")
+            if content_meta.get("content_omitted_ids"):
+                lines.append(
+                    "Content omitted due to budget: "
+                    + ", ".join(f"`{rid}`" for rid in content_meta["content_omitted_ids"])
+                )
+            return mcp_response("\n".join(lines).rstrip())
+
+        if not page_nodes:
             return mcp_response(f"# {title}\n\n*No memories found.*")
 
-        output = f"# {title} ({len(results)} results)\n\n"
-        for i, node in enumerate(results, 1):
+        output = f"# {title} ({len(page_nodes)} results)\n\n"
+        for i, node in enumerate(page_nodes, 1):
             etype = (node.metadata or {}).get("event_type", "memory")
             preview = node.content[:200] + "..." if len(node.content) > 200 else node.content
             created = node.created_at.isoformat()[:16] if node.created_at else ""
@@ -972,38 +2431,7 @@ async def handle_omega_welcome(arguments: dict) -> dict:
             next_steps += "\n**Also recommended**: " + " | ".join(nudges)
         stable_parts.append("---\n" + next_steps)
 
-        # GitHub star ask + Pro upgrade nudge for free users
-        try:
-            from omega.server.mcp_server import _pro_licensed
-            if not _pro_licensed:
-                # Star ask -- show on every 5th session
-                show_star = False
-                try:
-                    from omega.telemetry import _load as _telem_load
-                    tdata = _telem_load()
-                    session_total = tdata.get("sessions", {}).get("total", 0)
-                    show_star = session_total <= 3 or session_total % 5 == 0
-                except Exception:
-                    show_star = True
 
-                cta_parts = []
-                if show_star:
-                    cta_parts.append(
-                        "**Tell the user**: If OMEGA is useful, please star us on GitHub: "
-                        "https://github.com/omega-memory/omega-memory"
-                    )
-                cta_parts.append(
-                    "**Tell the user**: OMEGA Pro unlocks 98 more tools (coordination, routing, knowledge base). "
-                    "$19/mo. Run `omega upgrade` in terminal to learn more."
-                )
-                stable_parts.append("\n---\n" + "\n".join(cta_parts))
-                try:
-                    from omega.telemetry import track_nag
-                    track_nag("welcome")
-                except Exception:
-                    pass
-        except Exception:
-            pass
 
         # Join with cache breakpoint between stable and volatile
         parts = stable_parts
@@ -1137,6 +2565,138 @@ async def handle_omega_edit_memory(arguments: dict) -> dict:
     except Exception as e:
         logger.error("omega_edit_memory failed: %s", e, exc_info=True)
         return mcp_error("Edit failed")
+
+
+# ============================================================================
+# Handler: omega_get_memory
+# ============================================================================
+
+
+async def handle_omega_get_memory(arguments: dict) -> dict:
+    """Fetch one or more full memory records by stable ID."""
+    memory_ids = arguments.get("memory_ids")
+    single_id = (arguments.get("memory_id") or "").strip()
+
+    if memory_ids is None:
+        if not single_id:
+            return mcp_error("memory_id or memory_ids is required")
+        ids = [single_id]
+        single = True
+    else:
+        if not isinstance(memory_ids, list):
+            return mcp_error("memory_ids must be a list")
+        ids = [str(mid).strip() for mid in memory_ids if str(mid).strip()]
+        if single_id:
+            ids.insert(0, single_id)
+        single = len(ids) == 1
+
+    if not ids:
+        return mcp_error("memory_id or memory_ids is required")
+    if len(ids) > 50:
+        return mcp_error("action='get' supports at most 50 memory IDs per call")
+
+    output_format = arguments.get("format", "markdown")
+    if output_format not in ("markdown", "json"):
+        return mcp_error("format must be one of: markdown, json")
+
+    content_mode = arguments.get("content_mode", "full")
+    if content_mode not in ("full", "preview", "none"):
+        return mcp_error("content_mode must be one of: full, preview, none")
+
+    include_metadata = arguments.get("include_metadata", True)
+    include_edges = arguments.get("include_edges", False)
+    track_access = arguments.get("track_access", True)
+    preview_chars = _clamp_int(arguments.get("preview_chars", 800), default=800, min_val=1, max_val=20000)
+    raw_budget = arguments.get("budget_chars")
+    budget_chars = None
+    if raw_budget is not None:
+        budget_chars = _clamp_int(raw_budget, default=30000, min_val=0, max_val=200000)
+    max_related = _clamp_int(arguments.get("max_related", 10), default=10, min_val=0, max_val=50)
+    edge_types = arguments.get("edge_types")
+    if edge_types is not None and not isinstance(edge_types, list):
+        return mcp_error("edge_types must be a list")
+
+    try:
+        from omega.bridge import _get_store
+
+        db = _get_store()
+        records = []
+        not_found = []
+        for memory_id in ids:
+            node = db.get_node(memory_id, track_access=bool(track_access))
+            if node is None:
+                not_found.append(memory_id)
+                continue
+            record = _memory_result_to_dict(
+                node,
+                include_metadata=bool(include_metadata),
+                content_mode="full",
+                preview_chars=preview_chars,
+            )
+            if include_edges and max_related > 0 and hasattr(db, "get_related_chain"):
+                related = db.get_related_chain(
+                    memory_id,
+                    max_hops=1,
+                    edge_types=edge_types,
+                    exclude_ids=set(ids),
+                )
+                normalized_related = []
+                for related_record in related[:max_related]:
+                    related_payload = dict(related_record)
+                    related_metadata = dict(related_payload.get("metadata") or {})
+                    related_payload.setdefault("id", related_payload.get("node_id"))
+                    related_payload.setdefault("event_type", related_metadata.get("event_type", "memory"))
+                    if not include_metadata:
+                        related_payload.pop("metadata", None)
+                    normalized_related.append(related_payload)
+                record["related"] = normalized_related
+            records.append(record)
+
+        records, content_meta = _apply_get_record_content_controls(
+            records,
+            content_mode=content_mode,
+            preview_chars=preview_chars,
+            budget_chars=budget_chars,
+        )
+
+        if single and not records:
+            return mcp_error(f"Memory `{ids[0]}` not found")
+
+        payload = {
+            "action": "get",
+            "count": len(records),
+            "records": records,
+            "not_found": not_found,
+            "content": content_meta,
+        }
+        if single:
+            payload["record"] = records[0]
+
+        if output_format == "json":
+            return mcp_response(json.dumps(payload, indent=2))
+
+        if single:
+            markdown = _format_memory_record_markdown(records[0])
+            footer = _format_content_control_footer(content_meta)
+            if footer:
+                markdown = markdown + "\n\n" + footer
+            return mcp_response(markdown)
+
+        lines = [f"# Memories ({len(records)} found"]
+        if not_found:
+            lines[0] += f", {len(not_found)} not found"
+        lines[0] += ")"
+        if not_found:
+            lines.extend(["", "Not found: " + ", ".join(f"`{mid}`" for mid in not_found)])
+        for i, record in enumerate(records, 1):
+            lines.extend(["", _format_memory_record_markdown(record, index=i)])
+        footer = _format_content_control_footer(content_meta)
+        if footer:
+            lines.extend(["", footer])
+        return mcp_response("\n".join(lines))
+    except Exception as e:
+        logger.error("omega_get_memory failed: %s", e, exc_info=True)
+        return mcp_error(f"Get failed: {e}")
 
 
 # ============================================================================
@@ -1987,21 +3547,24 @@ async def handle_omega_protocol(arguments: dict) -> dict:
         return mcp_response(result)
     except ImportError:
         # Free tier: protocol module not available, return basic operating rules
-        # with upgrade CTA
         basic_protocol = (
-            "# OMEGA Protocol (Free Tier)\n\n"
+            "# OMEGA Protocol (Community Edition)\n\n"
             "## Memory Usage\n"
             "- Call `omega_store()` after completing tasks to save key decisions\n"
-            "- Call `omega_query()` before non-trivial tasks to check for prior context\n"
+            "- For project orientation or handoff, use `omega_context(project=..., mode=\"handoff\")`\n"
+            "- For long-context work, use `omega_recall(query=..., profile=..., project=..., budget_chars=...)`\n"
+            "- For structured inspection, use `omega_query(format=\"json\", content_mode=\"preview\"|\"full\")`\n"
+            "- For exact IDs, use `omega_memory(action=\"get\", memory_id=\"mem-...\")`\n"
+            "- For broad exploration, use `omega_query(mode=\"browse\", browse_by=\"recent\"|\"type\"|\"session\", offset=0)`\n"
             "- Use `omega_checkpoint` when context window is getting full\n\n"
+            "If a tool is not exposed directly by your MCP client, call `omega_tools(tool=\"...\")` "
+            "to inspect its schema, then `omega_call(tool=\"...\", args={...})`.\n\n"
             "## Session Workflow\n"
             "1. `omega_welcome()` at session start (done)\n"
-            "2. `omega_query()` before major work\n"
-            "3. `omega_store()` after decisions and task completion\n\n"
-            "---\n"
-            "**Tell the user:** \"OMEGA Pro adds the full protocol engine with coordination rules, "
-            "multi-agent playbooks, and advisory intelligence. "
-            "Run `omega upgrade` in terminal to learn more.\"\n"
+            "2. `omega_context(project=..., mode=\"handoff\")` for repo/task recovery\n"
+            "3. `omega_recall(query=..., profile=\"planning\"|\"debug\"|\"handoff\")` before major work\n"
+            "4. `omega_memory(action=\"get\", memory_id=\"mem-...\")` for full records found by search\n"
+            "5. `omega_store()` after decisions and task completion\n"
         )
 
         # Mark protocol as loaded
@@ -2280,7 +3843,7 @@ async def handle_omega_supersede_memory(arguments: dict) -> dict:
 
 
 # ============================================================================
-# Composite Handler: omega_memory (edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede)
+# Composite Handler: omega_memory (get, edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede)
 # ============================================================================
 
 
@@ -2288,7 +3851,9 @@ async def handle_omega_memory(arguments: dict) -> dict:
     """Route omega_memory actions to existing handlers."""
     action = arguments.get("action", "").strip()
 
-    if action == "edit":
+    if action == "get":
+        return await handle_omega_get_memory(arguments)
+    elif action == "edit":
         return await handle_omega_edit_memory(arguments)
     elif action == "delete":
         return await handle_omega_delete_memory(arguments)
@@ -2307,7 +3872,7 @@ async def handle_omega_memory(arguments: dict) -> dict:
     elif action == "supersede":
         return await handle_omega_supersede_memory(arguments)
     else:
-        return mcp_error(f"Unknown omega_memory action: {action}. Use: edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede")
+        return mcp_error(f"Unknown omega_memory action: {action}. Use: get, edit, delete, feedback, similar, traverse, link, flagged, check_contradictions, supersede")
 
 
 # ============================================================================
@@ -3290,19 +4855,66 @@ _ALL_SCHEMAS: list = []
 _ALL_HANDLERS: dict = {}
 
 
+def _example_args_for_tool(tool_name: str) -> dict:
+    """Return a small omega_call args example for schema-discovery output."""
+    examples: dict[str, dict] = {
+        "omega_context": {
+            "project": "/path/to/repo",
+            "mode": "handoff",
+        },
+        "omega_recall": {
+            "query": "prior decisions before editing this repo",
+            "profile": "planning",
+            "project": "/path/to/repo",
+            "budget_chars": 12000,
+        },
+        "omega_query": {
+            "query": "debugging checklist",
+            "format": "json",
+            "content_mode": "preview",
+        },
+        "omega_memory": {
+            "action": "get",
+            "memory_id": "mem-...",
+            "format": "json",
+        },
+        "omega_checkpoint": {
+            "task_title": "current task",
+            "progress": "what changed and what remains",
+            "next_steps": "next safe action",
+        },
+    }
+    return examples.get(tool_name, {})
+
+
 async def handle_omega_tools(args: Dict[str, Any]) -> dict:
-    """List available tools or get the full schema for a specific tool."""
+    """List tools, return a raw input schema, or return a full discovery record."""
     import json
     from omega.server.tool_schemas import TOOL_CATEGORIES
 
     tool_name = args.get("tool")
+    detail = args.get("detail", "schema")
     category = args.get("category", "all")
 
     if tool_name:
-        # Return full schema for a specific tool
+        # Preserve the original omega_tools(tool=...) behavior by default:
+        # callers that expect the raw inputSchema still receive that shape.
         for schema in _ALL_SCHEMAS:
             if schema["name"] == tool_name:
-                return mcp_response(json.dumps(schema["inputSchema"], indent=2))
+                if detail != "full":
+                    return mcp_response(json.dumps(schema["inputSchema"], indent=2))
+                cat = TOOL_CATEGORIES.get(tool_name, "other")
+                discovery = {
+                    "name": tool_name,
+                    "category": cat,
+                    "description": schema.get("description", ""),
+                    "inputSchema": schema["inputSchema"],
+                    "omega_call_example": {
+                        "tool": tool_name,
+                        "args": _example_args_for_tool(tool_name),
+                    },
+                }
+                return mcp_response(json.dumps(discovery, indent=2))
         return mcp_error(f"Unknown tool: {tool_name}")
 
     # List all tools, optionally filtered by category
@@ -3329,7 +4941,10 @@ async def handle_omega_tools(args: Dict[str, Any]) -> dict:
         return mcp_response(f"No tools found in category '{category}'.")
 
     header = f"Available OMEGA tools ({len(lines)}):\n\n"
-    footer = "\n\nUse omega_tools(tool='name') to get the full input schema for any tool."
+    footer = (
+        "\n\nUse omega_tools(tool='name') for the input schema, or "
+        "omega_tools(tool='name', detail='full') for description and omega_call example."
+    )
     body = "\n".join(lines)
 
     if pro_lines:
@@ -3377,9 +4992,11 @@ async def handle_omega_call(args: Dict[str, Any]) -> dict:
 # ============================================================================
 
 HANDLERS: Dict[str, Any] = {
-    # === 15 consolidated tools (omega_lessons removed — auto-surfaced via hooks) ===
+    # === 17 consolidated tools (omega_lessons removed — auto-surfaced via hooks) ===
     "omega_store": handle_omega_store,
     "omega_query": handle_omega_query,
+    "omega_recall": handle_omega_recall,
+    "omega_context": handle_omega_context,
     "omega_welcome": handle_omega_welcome,
     "omega_protocol": handle_omega_protocol,
     "omega_checkpoint": handle_omega_checkpoint,

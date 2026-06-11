@@ -287,7 +287,8 @@ class StoreMixin:
         with self._lock:
             row = self._exec(
                 """SELECT node_id, content, metadata, created_at, access_count,
-                          last_accessed, ttl_seconds
+                          last_accessed, ttl_seconds, valid_from, valid_until,
+                          derived_from, source_uri, status
                    FROM memories WHERE node_id = ?""",
                 (node_id,),
             ).fetchone()
@@ -302,6 +303,15 @@ class StoreMixin:
                     (now, node_id),
                 )
                 self._commit()
+                row = (
+                    row[0],
+                    row[1],
+                    row[2],
+                    row[3],
+                    (row[4] or 0) + 1,
+                    now,
+                    *row[6:],
+                )
 
             return self._row_to_result(row)
 

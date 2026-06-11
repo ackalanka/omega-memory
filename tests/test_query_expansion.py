@@ -3,8 +3,7 @@
 import json
 import os
 import time
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from omega.query_expansion import (
     expand_query,

@@ -2,6 +2,7 @@
 
 Covers:
   - handle_omega_reflect: pro-only module graceful fallback
+  - omega_memory action=get: direct full record hydration
   - omega_memory action=link: manual edge creation
   - omega_memory action=flagged: flagged memory listing
   - omega_memory action=supersede: manual supersession
@@ -10,6 +11,7 @@ Covers:
   - omega_stats action=milestones: milestone progress
   - handle_omega_browse: browse by type/session/recent
 """
+import json
 from unittest.mock import patch
 
 import pytest
@@ -21,6 +23,7 @@ from omega.server.handlers import (
     handle_omega_stats,
     handle_omega_browse,
 )
+from omega.server.tool_schemas import TOOL_SCHEMAS
 from omega.sqlite_store import SQLiteStore
 
 
@@ -67,6 +70,304 @@ class TestOmegaReflect:
         """Unknown action should return an error."""
         result = await handle_omega_reflect({"action": "bogus"})
         assert result.get("isError")
+
+
+# ---------------------------------------------------------------------------
+# omega_memory action=get
+# ---------------------------------------------------------------------------
+
+
+class TestOmegaMemoryGet:
+    def test_get_schema_exposes_budget_chars(self):
+        schema = next(tool for tool in TOOL_SCHEMAS if tool["name"] == "omega_memory")
+        props = schema["inputSchema"]["properties"]
+        assert "get" in props["action"]["enum"]
+        assert "budget_chars" in props
+        assert "unbounded direct fetch" in props["budget_chars"]["description"]
+
+    @pytest.mark.asyncio
+    async def test_get_single_memory_markdown_full_content(self, mock_get_store):
+        store = mock_get_store
+        long_content = "Direct hydration keeps the full memory body. " * 20
+        node_id = store.store(
+            long_content,
+            session_id="sess-get-1",
+            metadata={
+                "event_type": "checkpoint",
+                "project": "/tmp/omega-dev-test",
+                "tags": ["retrieval", "checkpoint"],
+                "source_uri": "test://source",
+            },
+            source_uri="test://source",
+        )
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        text = result["content"][0]["text"]
+        assert node_id in text
+        assert long_content in text
+        assert "checkpoint" in text
+        assert "test://source" in text
+
+    @pytest.mark.asyncio
+    async def test_get_single_memory_json_metadata_and_columns(self, mock_get_store):
+        store = mock_get_store
+        node_id = store.store(
+            "Structured get should expose stable metadata fields.",
+            session_id="sess-get-json",
+            metadata={
+                "event_type": "decision",
+                "project": "/tmp/omega-dev-test",
+                "entity_id": "entity-1",
+                "agent_type": "test-agent",
+                "tags": ["json"],
+            },
+            entity_id="entity-1",
+            agent_type="test-agent",
+            source_uri="test://json-source",
+            status="speculative",
+        )
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        assert record["id"] == node_id
+        assert record["event_type"] == "decision"
+        assert record["session_id"] == "sess-get-json"
+        assert record["project"] == "/tmp/omega-dev-test"
+        assert record["entity_id"] == "entity-1"
+        assert record["agent_type"] == "test-agent"
+        assert record["source_uri"] == "test://json-source"
+        assert record["status"] == "speculative"
+        assert record["metadata"]["tags"] == ["json"]
+
+    @pytest.mark.asyncio
+    async def test_get_missing_memory_returns_error(self, mock_get_store):
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": "mem-000000000000",
+        })
+
+        assert result.get("isError")
+        assert "not found" in result["content"][0]["text"].lower()
+
+    @pytest.mark.asyncio
+    async def test_get_batch_preserves_order_and_reports_missing(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("First batch memory", metadata={"event_type": "memory"})
+        second = store.store("Second batch memory", metadata={"event_type": "lesson_learned"})
+        missing = "mem-ffffffffffff"
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, missing, second],
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert [record["id"] for record in payload["records"]] == [first, second]
+        assert payload["not_found"] == [missing]
+
+    @pytest.mark.asyncio
+    async def test_get_batch_full_content_budget_truncates_and_reports(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("A" * 30, metadata={"event_type": "memory"})
+        second = store.store("B" * 30, metadata={"event_type": "lesson_learned"})
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, second],
+            "format": "json",
+            "budget_chars": 40,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["content"]["budget_chars"] == 40
+        assert payload["content"]["content_budget_used"] == 40
+        assert payload["content"]["content_truncated"] is True
+        assert payload["records"][0]["content"] == "A" * 30
+        assert payload["records"][1]["content"] == "B" * 10
+        assert payload["records"][1]["content_truncated"] is True
+        assert payload["records"][1]["id"] in payload["content"]["content_truncated_ids"]
+
+    @pytest.mark.asyncio
+    async def test_get_markdown_reports_budget_footer(self, mock_get_store):
+        store = mock_get_store
+        first = store.store("First markdown budget body.", metadata={"event_type": "memory"})
+        second = store.store("Second markdown budget body.", metadata={"event_type": "memory"})
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_ids": [first, second],
+            "budget_chars": 35,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        text = result["content"][0]["text"]
+        assert "Content budget: 35/35 chars" in text
+        assert "Content truncated:" in text
+
+    @pytest.mark.asyncio
+    async def test_get_track_access_false_does_not_increment(self, mock_get_store):
+        store = mock_get_store
+        node_id = store.store("Audit fetch should not update access counters.")
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": node_id,
+            "format": "json",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        assert payload["record"]["access_count"] == 0
+        node = store.get_node(node_id, track_access=False)
+        assert node.access_count == 0
+        assert node.last_accessed is None
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_exposes_related_id_alias(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store("Parent memory for direct edge hydration.", metadata={"event_type": "decision"})
+        child_id = store.store("Child memory for direct edge hydration.", metadata={"event_type": "lesson_learned"})
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        json_result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "track_access": False,
+        })
+        markdown_result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "include_edges": True,
+            "track_access": False,
+        })
+
+        assert not json_result.get("isError")
+        assert not markdown_result.get("isError")
+        payload = json.loads(json_result["content"][0]["text"])
+        related = payload["record"]["related"][0]
+        assert related["node_id"] == child_id
+        assert related["id"] == child_id
+        assert related["event_type"] == "lesson_learned"
+        assert child_id in markdown_result["content"][0]["text"]
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_preserves_deterministic_related_order(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store(
+            "Parent memory for ordered direct edge hydration.",
+            metadata={"event_type": "decision"},
+            skip_inference=True,
+        )
+        weak_id = store.store(
+            "Weak direct related memory.",
+            metadata={"event_type": "memory"},
+            skip_inference=True,
+        )
+        strong_id = store.store(
+            "Strong direct related memory.",
+            metadata={"event_type": "lesson_learned"},
+            skip_inference=True,
+        )
+
+        store.add_edge(parent_id, weak_id, edge_type="related", weight=0.2)
+        store.add_edge(parent_id, strong_id, edge_type="supersedes", weight=0.9)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "max_related": 2,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        related = payload["record"]["related"]
+        assert [record["id"] for record in related] == [strong_id, weak_id]
+        assert [record["edge_type"] for record in related] == ["supersedes", "related"]
+        assert [record["weight"] for record in related] == [0.9, 0.2]
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_respects_include_metadata_false(self, mock_get_store):
+        store = mock_get_store
+        parent_id = store.store("Parent related metadata toggle.", metadata={"event_type": "decision"})
+        child_id = store.store(
+            "Child related metadata toggle distinct body.",
+            metadata={"event_type": "lesson_learned", "private_note": "hidden"},
+        )
+        assert parent_id != child_id
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "include_metadata": False,
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        related = record["related"][0]
+        assert "metadata" not in record
+        assert "metadata" not in related
+        assert related["id"] == child_id
+        assert related["event_type"] == "lesson_learned"
+
+    @pytest.mark.asyncio
+    async def test_get_include_edges_respects_content_mode_none(self, mock_get_store):
+        store = mock_get_store
+        parent_text = "Parent none-mode retrieval anchor for deployment policy."
+        child_text = "Child none-mode retrieval edge for sqlite maintenance."
+        parent_id = store.store(parent_text, metadata={"event_type": "decision"})
+        child_id = store.store(child_text, metadata={"event_type": "lesson_learned"})
+        assert parent_id != child_id
+        store.add_edge(parent_id, child_id, edge_type="related", weight=0.8)
+
+        result = await handle_omega_memory({
+            "action": "get",
+            "memory_id": parent_id,
+            "format": "json",
+            "include_edges": True,
+            "content_mode": "none",
+            "track_access": False,
+        })
+
+        assert not result.get("isError")
+        payload = json.loads(result["content"][0]["text"])
+        record = payload["record"]
+        related = record["related"][0]
+        assert record["content"] is None
+        assert related["id"] == child_id
+        assert related["content"] is None
+        assert record["content_length"] == len(parent_text)
+        assert related["content_length"] == len(child_text)
 
 
 # ---------------------------------------------------------------------------

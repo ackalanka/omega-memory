@@ -103,6 +103,103 @@ class TestGraphTraversal:
         assert len(results) == 1
         assert results[0]["node_id"] == b
 
+    def test_related_order_prefers_stronger_same_hop_edges(self, store):
+        a = store.store(content="Anchor memory for same-hop related ordering", skip_inference=True)
+        weaker = store.store(content="Weaker related memory at the same hop", skip_inference=True)
+        stronger = store.store(content="Stronger related memory at the same hop", skip_inference=True)
+
+        store.add_edge(a, weaker, "related", 0.2)
+        store.add_edge(a, stronger, "related", 0.9)
+
+        results = store.get_related_chain(a, max_hops=1)
+
+        assert [r["node_id"] for r in results] == [stronger, weaker]
+
+    def test_related_order_keeps_nearest_hop_before_stronger_distant_edge(self, store):
+        a = store.store(content="Anchor memory for hop-first graph ordering", skip_inference=True)
+        near = store.store(content="Nearby memory reached through a weak direct edge", skip_inference=True)
+        distant = store.store(content="Distant memory reached through a stronger second-hop edge", skip_inference=True)
+
+        store.add_edge(a, near, "related", 0.1)
+        store.add_edge(near, distant, "related", 1.0)
+
+        results = store.get_related_chain(a, max_hops=2)
+
+        assert [r["node_id"] for r in results] == [near, distant]
+        assert [r["hop"] for r in results] == [1, 2]
+
+    def test_related_order_uses_edge_type_priority_for_equal_weight(self, store):
+        a = store.store(content="Anchor memory for edge type priority", skip_inference=True)
+        lower_priority = store.store(content="Equal-weight related edge target", skip_inference=True)
+        higher_priority = store.store(content="Equal-weight supersedes edge target", skip_inference=True)
+
+        store.add_edge(a, lower_priority, "related", 0.7)
+        store.add_edge(a, higher_priority, "supersedes", 0.7)
+
+        results = store.get_related_chain(a, max_hops=1)
+
+        assert [r["node_id"] for r in results] == [higher_priority, lower_priority]
+        assert [r["edge_type"] for r in results] == ["supersedes", "related"]
+
+    def test_related_order_uses_newest_edge_timestamp_for_equal_edges(self, store):
+        a = store.store(content="Anchor memory for timestamp related ordering", skip_inference=True)
+        older = store.store(content="Older equal edge target", skip_inference=True)
+        newer = store.store(content="Newer equal edge target", skip_inference=True)
+
+        store.add_edge(a, older, "related", 0.7)
+        store.add_edge(a, newer, "related", 0.7)
+        store._conn.execute(
+            "UPDATE edges SET created_at = ? WHERE source_id = ? AND target_id = ? AND edge_type = ?",
+            ("2026-06-09T09:00:00+00:00", a, older, "related"),
+        )
+        store._conn.execute(
+            "UPDATE edges SET created_at = ? WHERE source_id = ? AND target_id = ? AND edge_type = ?",
+            ("2026-06-09T10:00:00+00:00", a, newer, "related"),
+        )
+        store._commit()
+
+        results = store.get_related_chain(a, max_hops=1)
+
+        assert [r["node_id"] for r in results] == [newer, older]
+        assert results[0]["edge_created_at"] == "2026-06-09T10:00:00+00:00"
+
+    def test_related_order_uses_stable_node_id_for_complete_ties(self, store):
+        a = store.store(content="Anchor memory for stable related ID tie-break", skip_inference=True)
+        first = store.store(content="First equal edge target", skip_inference=True)
+        second = store.store(content="Second equal edge target", skip_inference=True)
+        expected = sorted([first, second])
+
+        store.add_edge(a, first, "related", 0.7)
+        store.add_edge(a, second, "related", 0.7)
+        for node_id in (first, second):
+            store._conn.execute(
+                "UPDATE edges SET created_at = ? WHERE source_id = ? AND target_id = ? AND edge_type = ?",
+                ("2026-06-09T09:00:00+00:00", a, node_id, "related"),
+            )
+        store._commit()
+
+        results = store.get_related_chain(a, max_hops=1)
+
+        assert [r["node_id"] for r in results] == expected
+
+    def test_related_duplicate_same_hop_target_keeps_best_edge_metadata(self, store):
+        a = store.store(content="Anchor memory for duplicate same-hop target", skip_inference=True)
+        weak_bridge = store.store(content="Bridge with weaker path to duplicate target", skip_inference=True)
+        strong_bridge = store.store(content="Bridge with stronger path to duplicate target", skip_inference=True)
+        duplicate = store.store(content="Duplicate target reached through two same-hop paths", skip_inference=True)
+
+        store.add_edge(a, weak_bridge, "related", 0.8)
+        store.add_edge(a, strong_bridge, "related", 0.8)
+        store.add_edge(weak_bridge, duplicate, "related", 0.2)
+        store.add_edge(strong_bridge, duplicate, "supersedes", 0.9)
+
+        results = store.get_related_chain(a, max_hops=2)
+        duplicate_entry = {r["node_id"]: r for r in results}[duplicate]
+
+        assert duplicate_entry["hop"] == 2
+        assert duplicate_entry["weight"] == 0.9
+        assert duplicate_entry["edge_type"] == "supersedes"
+
 
 class TestTraverseBridge:
     """Tests for bridge.traverse()."""

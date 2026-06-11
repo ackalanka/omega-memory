@@ -1,6 +1,6 @@
-"""OMEGA MCP Tool Schemas -- 15 tools for memory management.
+"""OMEGA MCP Tool Schemas -- 17 tools for memory management.
 
-Consolidated into 15 action-discriminated composites.
+Consolidated into 17 action-discriminated composites.
 All original capabilities preserved; low-frequency operations grouped by intent.
 omega_briefing and omega_habits remain as backward-compat aliases in handlers.
 omega_lessons removed — cross-session lessons auto-surface via hooks on file edits.
@@ -90,6 +90,11 @@ TOOL_SCHEMAS = [
                     "enum": ["type", "session", "recent"],
                     "description": "Browse dimension (only for mode='browse'): 'type' lists by event_type, 'session' lists by session_id, 'recent' lists most recent memories",
                 },
+                "offset": {
+                    "type": "integer",
+                    "description": "Zero-based result offset for mode='browse' pagination.",
+                    "default": 0,
+                },
                 "context": {
                     "type": "string",
                     "enum": ["general", "error_debug", "file_edit", "planning", "review"],
@@ -123,6 +128,121 @@ TOOL_SCHEMAS = [
                     "type": "string",
                     "enum": ["active", "superseded", "speculative", "archived"],
                     "description": "Filter by memory lifecycle status. Default: returns all statuses. Use 'active' to exclude superseded/archived.",
+                },
+                "format": {
+                    "type": "string",
+                    "enum": ["markdown", "json"],
+                    "description": "Output format for semantic and browse modes. Default markdown preserves existing preview behavior.",
+                    "default": "markdown",
+                },
+                "content_mode": {
+                    "type": "string",
+                    "enum": ["preview", "full", "none"],
+                    "description": "Semantic and browse mode content shape when using the structured output path. Default preview.",
+                    "default": "preview",
+                },
+                "preview_chars": {
+                    "type": "integer",
+                    "description": "Preview character limit for semantic and browse structured output. Default 200 to match existing previews.",
+                    "default": 200,
+                },
+                "budget_chars": {
+                    "type": "integer",
+                    "description": "Global content budget for semantic and browse modes when content_mode='full'. Default 30000, max 200000.",
+                    "default": 30000,
+                },
+                "include_metadata": {
+                    "type": "boolean",
+                    "description": "Include full metadata in structured semantic and browse results. Defaults true for JSON and false for markdown.",
+                },
+                "include_constraints": {
+                    "type": "boolean",
+                    "description": "Include automatically injected matching constraints in structured semantic results.",
+                    "default": True,
+                },
+                "include_preferences": {
+                    "type": "boolean",
+                    "description": "Include automatically injected matching user preferences in structured semantic results.",
+                    "default": True,
+                },
+            },
+        },
+    },
+    {
+        "name": "omega_recall",
+        "description": "Search, hydrate, and pack relevant memories into a budgeted prompt-ready context block. Use when an agent needs enough retrieved memory content to act, not just search previews. Output separates records into two fields: `results` now contains only ranked semantic search records. Constraint and preference records are no longer included here. `constraints` is a new dedicated output field containing auto-injected constraint and preference records. Version boundary note: constraints field added in dev/retrieval-tools; results now contains only ranked search records.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Recall query. Required."},
+                "profile": {
+                    "type": "string",
+                    "enum": ["general", "debug", "planning", "handoff", "review", "implementation"],
+                    "description": "Transparent retrieval preset for common agent intents.",
+                    "default": "general",
+                },
+                "limit": {"type": "integer", "description": "Max hydrated primary memories.", "default": 5},
+                "budget_chars": {"type": "integer", "description": "Total character budget for packed memory content.", "default": 12000},
+                "event_type": {"type": "string", "description": "Optional hard event type filter. Overrides profile event-type expansion."},
+                "project": {"type": "string"},
+                "session_id": {"type": "string"},
+                "context_file": {"type": "string", "description": "Current file being edited (boosts implementation recall)"},
+                "context_tags": {"type": "array", "items": {"type": "string"}, "description": "Context tags for boosting"},
+                "filter_tags": {"type": "array", "items": {"type": "string"}, "description": "Hard filter: ALL tags must match"},
+                "temporal_range": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2, "description": "[start_iso, end_iso] date range filter"},
+                "entity_id": {"type": "string", "description": "Filter to entity. Omit for all."},
+                "agent_type": {"type": "string", "description": "Filter to agent type. Omit for all."},
+                "memory_type": {
+                    "type": "string",
+                    "enum": ["episodic", "semantic", "procedural"],
+                    "description": "Filter by memory type.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Filter by memory lifecycle status.",
+                },
+                "include_contradicted": {"type": "boolean", "description": "Return only contradicted memories.", "default": False},
+                "valid_at": {"type": "string", "description": "ISO datetime point-in-time validity filter."},
+                "expand_related": {"type": "boolean", "description": "Include related memories under each primary result.", "default": False},
+                "max_related": {"type": "integer", "description": "Max related memories per primary result.", "default": 3},
+                "edge_types": {"type": "array", "items": {"type": "string"}, "description": "Related edge type filter."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format.", "default": "markdown"},
+                "include_metadata": {"type": "boolean", "description": "Include full metadata in JSON result records. Defaults true for JSON, false for markdown."},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "omega_context",
+        "description": "Build a compact project-scoped context pack from recent checkpoints, completions, lessons, decisions, constraints, and optional focused recall. Use at handoff/planning/debug start when an agent needs project memory orientation.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "project": {"type": "string", "description": "Project path to scope the context pack. Defaults to current working directory."},
+                "mode": {
+                    "type": "string",
+                    "enum": ["handoff", "planning", "debug"],
+                    "description": "Context pack intent.",
+                    "default": "handoff",
+                },
+                "query": {"type": "string", "description": "Optional focused query to add a relevance-ranked section."},
+                "limit_per_type": {"type": "integer", "description": "Max memories per event-type section.", "default": 3},
+                "budget_chars": {"type": "integer", "description": "Total character budget for memory snippets/content.", "default": 12000},
+                "content_mode": {
+                    "type": "string",
+                    "enum": ["preview", "full", "none"],
+                    "description": "Memory content shape inside the context pack.",
+                    "default": "preview",
+                },
+                "preview_chars": {"type": "integer", "description": "Preview character limit per item when content_mode='preview'.", "default": 700},
+                "include_metadata": {"type": "boolean", "description": "Include full metadata in JSON item records. Defaults true for JSON, false for markdown."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format.", "default": "markdown"},
+                "status": {
+                    "type": "string",
+                    "enum": ["active", "superseded", "speculative", "archived"],
+                    "description": "Lifecycle status filter. Defaults to active.",
+                    "default": "active",
                 },
             },
         },
@@ -178,22 +298,31 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "omega_memory",
-        "description": "Manage a specific memory by ID: edit its content, delete it, mark it as superseded, mark it as helpful/unhelpful/outdated, find similar memories, traverse relationship edges, link two memories, or list flagged memories for review. Use when acting on an individual memory rather than searching broadly.",
+        "description": "Manage or inspect specific memories by ID: get full records, edit content, delete, mark superseded, mark helpful/unhelpful/outdated, find similar memories, traverse relationship edges, link two memories, or list flagged memories for review. Use when acting on individual memories rather than searching broadly.",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "action": {"type": "string", "enum": ["edit", "delete", "feedback", "similar", "traverse", "link", "flagged", "check_contradictions", "supersede"], "description": "Operation to perform"},
+                "action": {"type": "string", "enum": ["get", "edit", "delete", "feedback", "similar", "traverse", "link", "flagged", "check_contradictions", "supersede"], "description": "Operation to perform"},
                 "memory_id": {"type": "string", "description": "Memory node ID (required for most actions, not required for 'flagged' or 'check_contradictions')"},
+                "memory_ids": {"type": "array", "items": {"type": "string"}, "description": "Batch memory IDs for action='get'. Preserves request order. Max 50."},
                 "new_content": {"type": "string", "description": "New content (for action='edit') or content to check (for action='check_contradictions')"},
                 "rating": {"type": "string", "description": "helpful, unhelpful, or outdated (only for action='feedback')"},
                 "reason": {"type": "string", "description": "Optional explanation (for action='feedback' or action='supersede')"},
                 "limit": {"type": "integer", "description": "Max results (default 5)", "default": 5},
                 "max_hops": {"type": "integer", "description": "Traversal depth 1-5 (default 2, only for action='traverse')", "default": 2},
                 "min_weight": {"type": "number", "description": "Min edge weight 0.0-1.0 (default 0.0, only for action='traverse')", "default": 0.0},
-                "edge_types": {"type": "array", "items": {"type": "string"}, "description": "Filter by edge type: related, contradicts, supersedes, evolves (only for action='traverse')"},
+                "edge_types": {"type": "array", "items": {"type": "string"}, "description": "Filter by edge type: related, contradicts, supersedes, evolves (for action='traverse' or action='get' with include_edges=true)"},
                 "target_id": {"type": "string", "description": "Target memory ID (for action='link' or action='supersede')"},
                 "edge_type": {"type": "string", "enum": ["related", "contradicts", "supersedes", "evolves"], "description": "Edge type (only for action='link', default 'related')"},
                 "weight": {"type": "number", "description": "Edge weight 0.0-1.0 (only for action='link', default 1.0)"},
+                "include_metadata": {"type": "boolean", "description": "Include metadata in action='get' output (default true)", "default": True},
+                "include_edges": {"type": "boolean", "description": "Include related edge expansion in action='get' output (default false)", "default": False},
+                "track_access": {"type": "boolean", "description": "For action='get', increment access_count and last_accessed (default true). Set false for audits/tests.", "default": True},
+                "content_mode": {"type": "string", "enum": ["full", "preview", "none"], "description": "For action='get': return full content, a preview, or no content (default full)", "default": "full"},
+                "preview_chars": {"type": "integer", "description": "Preview character limit for action='get' when content_mode='preview' (default 800)", "default": 800},
+                "budget_chars": {"type": "integer", "description": "Optional global content budget for action='get' when content_mode='full'. Omit for unbounded direct fetch. Applies across primary and related records and reports truncated/omitted IDs."},
+                "format": {"type": "string", "enum": ["markdown", "json"], "description": "Output format for action='get' (default markdown)", "default": "markdown"},
+                "max_related": {"type": "integer", "description": "Max related memories for action='get' when include_edges=true (default 10)", "default": 10},
             },
             "required": ["action"],
         },
@@ -434,6 +563,8 @@ TOOL_CATEGORIES = {
     # Core memory tools
     "omega_store": "memory",
     "omega_query": "query",
+    "omega_recall": "query",
+    "omega_context": "query",
     "omega_welcome": "session",
     "omega_protocol": "session",
     "omega_checkpoint": "memory",
@@ -537,13 +668,19 @@ TOOL_CATEGORIES = {
 CONDENSED_TOOL_SCHEMAS = [
     {
         "name": "omega_tools",
-        "description": "List available OMEGA tools or get the full schema for a specific tool. Call with no args to see all tool names and descriptions. Call with tool='name' to get its full input schema so you know what arguments to pass to omega_call.",
+        "description": "List available OMEGA tools or inspect a specific tool. Call with no args to see all tool names and descriptions. Call with tool='name' for the input schema, or detail='full' for description, category, input schema, and omega_call example before using omega_call.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "tool": {
                     "type": "string",
-                    "description": "Tool name to get full schema for. Omit to list all tools.",
+                    "description": "Tool name to inspect. Omit to list all tools.",
+                },
+                "detail": {
+                    "type": "string",
+                    "enum": ["schema", "full"],
+                    "description": "When tool is set: 'schema' returns the backward-compatible raw inputSchema; 'full' returns description, category, inputSchema, and omega_call example.",
+                    "default": "schema",
                 },
                 "category": {
                     "type": "string",
@@ -557,7 +694,7 @@ CONDENSED_TOOL_SCHEMAS = [
     },
     {
         "name": "omega_call",
-        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Example: omega_call(tool='omega_query', args={'query': 'auth decisions', 'mode': 'semantic'})",
+        "description": "Execute any OMEGA tool by name. Use omega_tools() first to discover available tools and their parameters. Retrieval examples: omega_call(tool='omega_recall', args={'query': 'auth decisions', 'profile': 'planning'}), omega_call(tool='omega_context', args={'project': '/repo', 'mode': 'handoff'}), omega_call(tool='omega_memory', args={'action': 'get', 'memory_id': 'mem-...'})",
         "inputSchema": {
             "type": "object",
             "properties": {

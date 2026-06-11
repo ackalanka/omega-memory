@@ -8,8 +8,13 @@ You have OMEGA persistent memory. At session start:
 
 Quick reference (protocol has full details):
 - `[MEMORY]`/`[HANDOFF]`/`[COORD]` blocks from hooks = ground truth
-- Before non-trivial tasks: `omega_query()` for prior context
-- Before spawning subagents: `omega_query()` first, inject results into agent prompt (subagents can't call OMEGA)
+- Project orientation/handoff: `omega_context(project=..., mode="handoff")`
+- Long-context work: `omega_recall(query=..., profile="planning"|"debug"|"handoff", project=..., budget_chars=...)`
+- Structured inspection: `omega_query(format="json", content_mode="preview"|"full")`
+- Known memory IDs: `omega_memory(action="get", memory_id="mem-...")`
+- Browse uncertain terms: `omega_query(mode="browse", browse_by="recent"|"type"|"session", offset=0)`
+- Condensed mode: `omega_tools(tool="...")` then `omega_call(tool="...", args={...})`
+- Before spawning subagents: use `omega_recall()` or structured `omega_query()` first, inject results into agent prompt (subagents can't call OMEGA)
 - After completing tasks: `omega_store(content, "decision")` for key outcomes — minimum 1 store per session
 - User says "remember": `omega_store(text, "user_preference")`
 - Context getting full: `omega_checkpoint` to save state

@@ -1,6 +1,5 @@
 """Test auto-registration of decisions when omega_store gets a decision type."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 
 def test_store_decision_auto_registers_coordination():

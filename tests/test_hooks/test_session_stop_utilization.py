@@ -1,5 +1,4 @@
 """Test session stop utilization report."""
-import pytest
 
 
 def test_utilization_report_flags_missing_tools():

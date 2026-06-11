@@ -2,7 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
 
 from omega.plugins import OmegaPlugin, discover_plugins
 

@@ -1,6 +1,5 @@
 """Tests for omega.task_utils text cleaning and summarization."""
 
-import pytest
 from unittest.mock import patch
 
 from omega.task_utils import _basic_clean, clean_task_text, summarize_task_text

@@ -4,7 +4,6 @@ Exercises handlers end-to-end with a real SQLiteStore, verifying the
 full path from handler arguments to MCP-compatible response dicts.
 """
 
-import os
 import re
 
 import pytest

@@ -1,9 +1,5 @@
 """Tests for bi-temporal data model (valid_from, valid_until columns)."""
-import time
-import pytest
-import sqlite3
 from datetime import datetime, timezone, timedelta
-from omega.sqlite_store import SQLiteStore
 from omega.schema import SCHEMA_VERSION
 
 

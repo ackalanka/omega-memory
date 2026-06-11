@@ -1,11 +1,8 @@
 """Tests for OMEGA MCP server HTTP daemon transport."""
 
-import asyncio
 import json
 import os
-import signal
 import socket
-import time
 from unittest.mock import patch
 
 import pytest

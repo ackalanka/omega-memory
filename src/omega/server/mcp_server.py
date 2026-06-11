@@ -214,7 +214,11 @@ REQUIRED at the start of EVERY conversation:
 3. Follow the protocol it returns
 
 During conversations:
-- Before non-trivial tasks: call omega_query() to check for prior context and decisions
+- For project orientation or handoff: call omega_context(project, mode='handoff'|'planning'|'debug')
+- For long-context tasks: call omega_recall(query, profile, project, budget_chars) to search and hydrate full memories
+- For structured inspection: call omega_query(format='json', content_mode='preview'|'full')
+- For exact known IDs: call omega_memory(action='get', memory_id='mem-...', include_edges=true if adjacent context matters)
+- For broad exploration: call omega_query(mode='browse', browse_by='recent'|'type'|'session', offset=0)
 - After completing tasks: call omega_store(content, "decision") to save key outcomes
 - When the user says "remember": call omega_store(text, "user_preference")
 - When context is getting full: call omega_checkpoint() to save state
@@ -235,6 +239,11 @@ During conversations:
 - Use omega_store() directly to save memories (decisions, lessons, preferences)
 - Use omega_tools() to discover available tools and their parameters
 - Use omega_call(tool='name', args={...}) to execute any other OMEGA tool
+- For project orientation or handoff: omega_call(tool='omega_context', args={'project': '...', 'mode': 'handoff'})
+- For long-context tasks: omega_call(tool='omega_recall', args={'query': '...', 'profile': 'planning', 'project': '...', 'budget_chars': 12000})
+- For structured inspection: omega_call(tool='omega_query', args={'query': '...', 'format': 'json', 'content_mode': 'full'})
+- For exact known IDs: omega_call(tool='omega_memory', args={'action': 'get', 'memory_id': 'mem-...', 'include_edges': true})
+- For broad exploration: omega_call(tool='omega_query', args={'mode': 'browse', 'browse_by': 'recent', 'offset': 0})
 - When context is getting full: omega_call(tool='omega_checkpoint', args={...})
 
 These tools are your memory. Use them proactively without being asked.\

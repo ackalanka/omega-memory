@@ -1546,7 +1546,7 @@ class TestWorkflowSequencesDeep:
 
     def _try_import_prefixspan(self):
         try:
-            from prefixspan import PrefixSpan
+            from prefixspan import PrefixSpan  # noqa: F401
             return True
         except ImportError:
             return False
