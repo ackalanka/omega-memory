@@ -710,6 +710,7 @@ promotion. Full evidence and fix records in
 - **F4 — Content Model Comment in _pack_recall_records** — Commit: 2c0a87d
 - **F5 — Constraint/Limit Interaction Test** — Commit: 01631e8
 - **F6 — Zero-Result Output Shape Test** — Commit: 4f05169
+- **Community Edition Rebrand** — Commit: 15abcb2
 
 ### Deferred
 - **F2 — N+1 Profile Queries** — See TD-001 in bugfix-pre-promotion.md.
@@ -723,7 +724,7 @@ promotion. Full evidence and fix records in
 - pytest: 91 passed, 0 failed
 - smoke: status: ok, tool_count: 17
 - Promotion gate path: /tmp/omega-memory-dev-promotion-home (canonical)
-- Commit range: 2f2f2b4..e113d8f
+- Commit range: 2f2f2b4..15abcb2
 
 ### Note: F5 Commit Order
 The test test_constraint_records_do_not_displace_semantic_results was added
