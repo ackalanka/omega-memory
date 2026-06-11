@@ -1,3 +1,7 @@
+# ARCHIVED: PROMOTION COMPLETE
+> [!WARNING]
+> Iteration 1 has been successfully promoted to the live branch. This document is retained for historical purposes. Do NOT attempt to re-run any tests, tasks, or hardening steps in this document. Please refer to `iteration-2-future-session-handoff.md` for active work.
+
 # Iteration 1 Future Session Handoff
 
 This document is the future-agent handoff for the Iteration 1 retrieval-tools

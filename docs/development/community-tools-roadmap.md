@@ -54,11 +54,9 @@ complete instructions, checklists, code notes, or long handoff entries.
 
 ## Iteration 1: Core Retrieval Tools
 
-Status: implementation complete in the development checkout. Live promotion is
-still pending and must follow `docs/development/live-safe-development.md`.
-Last verified code head recorded for this implementation: `2abb057`
-(`feat: add budgeted direct memory get`). The branch can move after that; always
-run `git log --oneline --decorate -12` before relying on a specific head.
+Status: Live Promotion Complete. Merged into `main` via PR #1 (commit `405f31e559ff606494edbcb7c9a07852aede6995`).
+Last verified code head recorded for this implementation: `fc037b3`.
+The development of Iteration 1 is finished.
 Future-session completed-vs-remaining details are maintained in
 `docs/development/iteration-1-future-session-handoff.md`.
 Agent-facing MCP discovery and usage guidance is also part of Iteration 1:

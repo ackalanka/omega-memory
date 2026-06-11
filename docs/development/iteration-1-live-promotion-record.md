@@ -46,3 +46,4 @@ If the live agents crash or the new code proves unstable in production, the roll
    ```
 3. **Restart the Session:**
    Restart the AI client application. It will immediately boot the stable, pre-promotion codebase against the healthy database snapshot.
+- **Final Merge Commit:** `405f31e559ff606494edbcb7c9a07852aede6995` (PR #1)
