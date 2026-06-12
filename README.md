@@ -1,6 +1,18 @@
-# OMEGA
+# Aleph
 
-**Cross-model memory for AI agents. Local-first. Works with Claude, GPT, Gemini, Cursor, Claw Code, and any MCP client.** Your agent's brain shouldn't live on someone else's server, or be locked to one provider.
+**Where Omega ends, Aleph begins.**
+
+Aleph is an enhanced community fork of the official [omega-memory/omega](https://github.com/omega-memory/omega) project. It provides **cross-model memory for AI agents. Local-first. Works with Claude, GPT, Gemini, Cursor, Claw Code, and any MCP client.** 
+
+### Why we forked
+The upstream OMEGA project is fantastic, but it follows an open-core model. It provides 25 core memory tools for free, but locks 55 critical capabilities behind a proprietary `omega-pro` paywall. This includes:
+- **Multi-Agent Coordination:** 29 tools for file/branch locking, session management, and task queues.
+- **Intelligent LLM Routing:** 10 tools for model switching and intent classification.
+- **Knowledge Base:** 5 tools for RAG and document ingestion.
+- **Entity Registry:** 8 tools for corporate memory and hierarchies.
+- **Secure Profile:** 3 tools for encrypted data storage.
+
+We believe an agent's foundational coordination, routing, and memory layers shouldn't be locked to a single vendor or trapped behind a pro tier. Aleph exists to build fully open, community-driven equivalents of these features, picking up exactly where OMEGA ends.
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![PyPI](https://img.shields.io/pypi/v/omega-memory.svg)](https://pypi.org/project/omega-memory/)
@@ -18,7 +30,7 @@ AI coding agents are stateless. Every new session starts from zero. The "solutio
 - **Cloud memory = someone else's database.** Services like Mem0 require API keys and send your data to their servers. When they change pricing, get acquired, or go down, your agent's accumulated intelligence disappears.
 - **Vendor lock-in.** Anthropic's Memory Tool only works with Claude. OpenAI's memory only works with GPT. Switch models, lose your memory.
 
-OMEGA solves this. Memory, coordination, and learning that runs entirely on your machine. Works with every major LLM and coding agent. No cloud. No API keys. No vendor lock-in.
+Aleph solves this. Memory, coordination, and learning that runs entirely on your machine. Works with every major LLM and coding agent. No cloud. No API keys. No vendor lock-in.
 
 <!-- TODO: terminal GIF showing memory recall across sessions -->
 <!-- mcp-name: io.github.omega-memory/omega-memory -->
@@ -89,7 +101,7 @@ omega setup
 
 ## 60-Second Quickstart
 
-OMEGA works through natural language — no API calls, no configuration. Just talk to Claude.
+Aleph works through natural language — no API calls, no configuration. Just talk to Claude.
 
 **1. Tell Claude to remember something:**
 > "Remember that the auth system uses JWT tokens, not session cookies"
@@ -101,7 +113,7 @@ Claude stores this as a permanent memory with semantic embeddings.
 **3. Ask about it:**
 > "What did I decide about authentication?"
 
-OMEGA surfaces the relevant memory automatically:
+Aleph surfaces the relevant memory automatically:
 ```
 Found 1 relevant memory:
   [decision] "The auth system uses JWT tokens, not session cookies"
@@ -136,9 +148,9 @@ That's it. Memories persist across sessions, accumulate over time, and are surfa
 | Works with Claude Code, Cursor, Claw Code | **Yes** | Claude only | Partial | No |
 | Free & open source | **Yes** (Apache 2.0) | No | Freemium | Freemium |
 
-*Anthropic's Memory Tool stores data client-side but requires Claude API calls for all memory operations. OMEGA runs entirely on-device, including embeddings (ONNX).*
+*Anthropic's Memory Tool stores data client-side but requires Claude API calls for all memory operations. Aleph runs entirely on-device, including embeddings (ONNX).*
 
-**Anthropic Memory is for Anthropic. OMEGA is for everyone.**
+**Anthropic Memory binds your agent to a single walled garden. OMEGA places your agent's full potential behind a ceiling of paywalls. Aleph shatters the ceiling. It is the first breath of true independence—an infinite, open expanse where memory and coordination belong to everyone.**
 
 ## Architecture
 
